@@ -385,11 +385,13 @@ def calculate_dashboard_state(
     # Demandas finalizadas / pendentes
     # Regra: usa coluna 'status'. Universo exclui _outros e _cronograma.
     # clientes_menos_5: clientes com < DEFAULT_MIN_FINALIZADAS finalizadas.
+    # clientes_menos_3_final: clientes com < DEFAULT_MIN_CRONOGRAMA finalizadas
+    #   (indicador separado de clientes_menos_3, que se refere ao cronograma).
     # ------------------------------------------------------------------
     if filters.is_all:
         finalizadas = int(round(resumo.get("Demandas finalizadas (total)", 0.0)))
         pendentes = int(round(resumo.get("Demandas pendentes", 0.0)))
-        clientes_menos_3_final = int(round(resumo.get("Clientes abaixo do mínimo", 0.0)))
+        clientes_menos_3_final = int(round(resumo.get("Clientes com menos de 3 finalizadas", 0.0)))  # FIX: chave própria
         clientes_menos_5 = int(round(resumo.get("Clientes com menos de 5 finalizadas", 0.0)))
     else:
         exclude = {"_outros", "_cronograma"}
@@ -398,19 +400,13 @@ def calculate_dashboard_state(
         finalizadas = int(done_mask.sum()) if not work.empty else 0
         pendentes = len(work) - finalizadas if not work.empty else 0
 
-        cron_df2 = filtered_df[filtered_df["categoria"].fillna("") == "_cronograma"]
-        if cron_df2.empty:
-            clientes_menos_3_final = 0
-        else:
-            group_cols2 = [c for c in ["area", "empresa_gfp"] if c in cron_df2.columns]
-            per_client2 = cron_df2.groupby(group_cols2).size()
-            clientes_menos_3_final = int((per_client2 < DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client2.empty else 0
-
+        # FIX: per_client_done calculado aqui para uso nos dois indicadores abaixo
         per_client_done = (
             work[done_mask].groupby("empresa_gfp").size()
             if not work.empty
             else pd.Series(dtype="int64")
         )
+        clientes_menos_3_final = int((per_client_done < DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client_done.empty else 0
         clientes_menos_5 = int((per_client_done < DEFAULT_MIN_FINALIZADAS).sum()) if not per_client_done.empty else 0
 
     total_gauge = finalizadas + pendentes

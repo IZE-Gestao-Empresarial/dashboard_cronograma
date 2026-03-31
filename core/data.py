@@ -344,6 +344,8 @@ def _build_resumo(df: pd.DataFrame) -> list[dict[str, Any]]:
     - Pendentes: demandas não concluídas fora das categorias internas
       (_cronograma, Diagnóstico).
     - Clientes com menos de 5 finalizadas: conta por empresa_gfp.
+    - Clientes com menos de 3 finalizadas: conta por empresa_gfp
+      (indicador separado do cronograma).
     """
     records = []
 
@@ -371,12 +373,12 @@ def _build_resumo(df: pd.DataFrame) -> list[dict[str, Any]]:
     if not cron_df.empty:
         per_client = cron_df.groupby("empresa_gfp").size()
         media = float(per_client.mean()) if not per_client.empty else 0.0
-        menos_3 = int((per_client < _DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client.empty else 0
+        menos_3_cronograma = int((per_client < _DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client.empty else 0
     else:
         media = 0.0
-        menos_3 = 0
+        menos_3_cronograma = 0
     records.append({"indicador": "Média por cliente (cronograma)", "valor": media})
-    records.append({"indicador": "Clientes abaixo do mínimo", "valor": menos_3})
+    records.append({"indicador": "Clientes abaixo do mínimo", "valor": menos_3_cronograma})
 
     # Finalizadas e pendentes (universo exclui categorias internas)
     elegivel = df[~df["categoria"].fillna("").isin(_EXCLUDE_FROM_INDICATORS)]
@@ -386,10 +388,18 @@ def _build_resumo(df: pd.DataFrame) -> list[dict[str, Any]]:
     records.append({"indicador": "Demandas finalizadas (total)", "valor": finalizadas_total})
     records.append({"indicador": "Demandas pendentes", "valor": pendentes})
 
-    # Clientes com menos de DEFAULT_MIN_FINALIZADAS demandas finalizadas
-    per_client_done = elegivel[done_mask].groupby("empresa_gfp").size() if not elegivel.empty else pd.Series(dtype="int64")
+    # Clientes por quantidade de demandas finalizadas
+    per_client_done = (
+        elegivel[done_mask].groupby("empresa_gfp").size()
+        if not elegivel.empty
+        else pd.Series(dtype="int64")
+    )
     menos_5 = int((per_client_done < _DEFAULT_MIN_FINALIZADAS).sum()) if not per_client_done.empty else 0
     records.append({"indicador": "Clientes com menos de 5 finalizadas", "valor": menos_5})
+
+    # FIX: indicador próprio para "menos de 3 finalizadas", separado do cronograma
+    menos_3_finalizadas = int((per_client_done < _DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client_done.empty else 0
+    records.append({"indicador": "Clientes com menos de 3 finalizadas", "valor": menos_3_finalizadas})
 
     return records
 

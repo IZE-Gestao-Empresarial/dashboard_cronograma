@@ -256,7 +256,7 @@ body { color: var(--text); }
 }
 
 .mini-stat-card__label {
-  font-size: min(calc(7.8 / 960 * 100vw), calc(7.8 / 540 * 100vh));
+  font-size: min(calc(7.6 / 960 * 100vw), calc(7.6 / 540 * 100vh));
   line-height: 1.15;
   color: #000000;
   /* white-space: nowrap   ← removido, deixa o texto quebrar naturalmente */
