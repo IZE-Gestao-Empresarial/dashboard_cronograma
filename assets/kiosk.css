@@ -1,0 +1,58 @@
+/* =========================
+   KIOSK / NO-SCROLL (Streamlit)
+   Objetivo: NUNCA permitir scroll vertical.
+   ========================= */
+
+html, body {
+  height: 100% !important;
+  width: 100% !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+
+/* Esconde menu/header/footer do Streamlit */
+#MainMenu { visibility: hidden; height: 0; }
+header[data-testid="stHeader"] { display: none !important; }
+[data-testid="stToolbar"] { display: none !important; }
+footer { display: none !important; }
+/* Esconde o status de "Running..." durante o reload */
+[data-testid="stStatusWidget"] { display: none !important; }
+
+/* Trava o app inteiro */
+[data-testid="stAppViewContainer"],
+[data-testid="stAppViewContainer"] > .main,
+[data-testid="stApp"] {
+  height: 100vh !important;
+  width: 100vw !important;
+  overflow: hidden !important;
+}
+
+/* Remove paddings e centraliza o conteúdo */
+[data-testid="stAppViewContainer"] > .main .block-container {
+  height: 100vh !important;
+  width: 100vw !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+
+  display: block !important;
+}
+
+/* Garante que o elemento do components.html não cause scroll */
+[data-testid="stElementContainer"],
+[data-testid="stVerticalBlock"] {
+  overflow: hidden !important;
+}
+
+/* Força o iframe a ocupar a viewport inteira (evita qualquer scroll do Streamlit) */
+iframe {
+  position: fixed !important;
+  inset: 0 !important;           /* top:0 right:0 bottom:0 left:0 */
+  width: 100vw !important;
+  height: 100vh !important;
+  border: 0 !important;
+  display: block !important;
+  margin: 0 !important;
+}

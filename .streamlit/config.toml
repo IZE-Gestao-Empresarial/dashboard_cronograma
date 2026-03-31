@@ -1,0 +1,12 @@
+[theme]
+base="light"
+primaryColor="#F05914"
+backgroundColor="#E8E8E8"
+secondaryBackgroundColor="#F4F4F5"
+textColor="#111827"
+font="museo"
+[client]
+toolbarMode = "minimal"
+
+[ui]
+hideTopBar = true

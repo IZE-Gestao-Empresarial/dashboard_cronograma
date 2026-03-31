@@ -1,0 +1,8 @@
+.streamlit/secrets.toml
+.streamlit/secrets.toml
+.streamlit/secrets_DEV.toml
+.streamlit/secrets_PROD.toml
+ui/__pycache__/
+core/__pycache__/
+__pycache__/
+*.pyc
