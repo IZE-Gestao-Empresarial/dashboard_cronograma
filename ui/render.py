@@ -111,11 +111,8 @@ def _render_atraso_rows(rows: list[dict[str, str | int]]) -> str:
 
 # ---------------------------------------------------------------------------
 # Gauge — segmentos em forma de pílula (path SVG com bordas arredondadas)
-# Baseado no gauge.py do dashboard de referência.
 # ---------------------------------------------------------------------------
 
-# Path de uma cápsula/pílula (78×160 px, bordas superiores arredondadas).
-# Cada segmento é este shape escalado e rotacionado para a posição correta no arco.
 _GAUGE_PILL_D = (
     "M62.8002 0C71.6745 0 78.6088 7.66227 77.7257 16.4926"
     "L64.7257 146.493C63.9589 154.161 57.5065 160 49.8002 160"
@@ -128,11 +125,11 @@ _GAUGE_PILL_D = (
 def _render_gauge(percentage: float | int | None) -> str:
     pct = max(0.0, min(100.0, _to_finite_number(percentage) or 0.0))
 
-    segments   = 13       # quantidade de pílulas
-    seg_len    = 42.0     # comprimento radial de cada pílula (px no viewBox)
-    r_inner    = 75.0     # raio do ponto de ancoragem de cada pílula
-    arc_start  = 185.0    # ângulo de início do arco (graus)
-    arc_end    = 355.0    # ângulo de fim do arco (graus)
+    segments  = 13      # quantidade de pílulas
+    seg_len   = 42.0    # comprimento radial de cada pílula (px no viewBox)
+    r_inner   = 75.0    # raio do ponto de ancoragem de cada pílula
+    arc_start = 185.0   # ângulo de início do arco (graus)
+    arc_end   = 355.0   # ângulo de fim do arco (graus)
 
     # Dimensões do path base (não alterar — são as do _GAUGE_PILL_D)
     base_w, base_h = 78.0, 160.0
@@ -143,7 +140,12 @@ def _render_gauge(percentage: float | int | None) -> str:
 
     # ViewBox fixo — o CSS controla o tamanho real via .gauge-svg
     vb_w, vb_h = 240, 160
-    cx, cy = 120, 123   # centro do arco dentro do viewBox
+
+    # ── ALTERADO: CY_RATIO é a variável de controle da posição Y do arco.
+    #    Mantenha sincronizado com --gauge-cy-ratio no dashboard.css.
+    CY_RATIO = 0.762   # cy / vb_h — aumente para descer o arco no viewBox
+    cx = 120
+    cy = round(vb_h * CY_RATIO)   # resulta em 123 com o valor padrão
 
     segs = []
     for i in range(segments):
@@ -195,7 +197,7 @@ def render_dashboard_html(state: dict, updated_at: str | None = None) -> str:
           <div class="table-card table-card--update">
             <div class="table-head table-head--2cols">
               <div>Cliente</div>
-              <div class="table-cell--right">Última Etapa</div>
+              <div class="table-cell--right" style="padding-right: calc(30 / 960 * 100vw);">Última Etapa</div>
             </div>
             {_render_atualizacao_rows(atualizacao_rows)}
           </div>

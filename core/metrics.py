@@ -137,7 +137,7 @@ def _resumo_lookup(resumo_records: list[dict[str, Any]]) -> dict[str, float]:
     return resumo
 
 
-def _format_stage_rows(df: pd.DataFrame, limit: int = 3) -> list[dict[str, Any]]:
+def _format_stage_rows(df: pd.DataFrame, limit: int = 100) -> list[dict[str, Any]]:
     """Formata linhas de atualização. Aceita data_atualizacao ou ultima_atualizacao_dt."""
     if df.empty:
         return []
@@ -201,7 +201,7 @@ def _build_filtered_updates(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
             "cliente": _text(row.get("empresa_gfp")),
             "etapa": _text(row.get("ultima_etapa") or row.get("item_nome")),
         }
-        for row in latest.head(3).to_dict(orient="records")
+        for row in latest.head(100).to_dict(orient="records")
     ]
 
 
@@ -227,7 +227,7 @@ def _build_filtered_delays(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
             "demandas": int(float(row.get("qtd_atraso") or 0)),
             "dias": int(float(row.get("max_dias_atraso") or 0)),
         }
-        for row in grouped.head(4).to_dict(orient="records")
+        for row in grouped.head(100).to_dict(orient="records")
     ]
 
 
@@ -343,7 +343,7 @@ def calculate_dashboard_state(
     # Atualização recente — independente da categoria
     # ------------------------------------------------------------------
     if filters.is_all:
-        atualizacao_rows = _format_stage_rows(_to_df(atualizacao_records), limit=3)
+        atualizacao_rows = _format_stage_rows(_to_df(atualizacao_records), limit=100)
     else:
         atualizacao_rows = _build_filtered_updates(filtered_df)
 
@@ -351,7 +351,7 @@ def calculate_dashboard_state(
     # Atrasos — apenas demandas COM previsao_dt e NÃO concluídas
     # ------------------------------------------------------------------
     if filters.is_all:
-        atraso_rows = _format_delay_rows(_to_df(atrasos_records), limit=4)
+        atraso_rows = _format_delay_rows(_to_df(atrasos_records), limit=100)
     else:
         atraso_rows = _build_filtered_delays(filtered_df)
 

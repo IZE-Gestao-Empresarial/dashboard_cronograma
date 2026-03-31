@@ -137,43 +137,34 @@ GROUP_TO_CATEGORY = {
     "Cronograma Atual": "_cronograma",
 }
 
-# Valores de grupo_anterior que forçam categoria "Extras"
-_GRUPO_ANTERIOR_EXTRAS: frozenset[str] = frozenset({
-    "[sem movimentação registrada]",
-    "Cronograma Atual",
-})
-
-
 def _infer_category(grupo_nome: str, grupo_anterior: str) -> str:
     """
     Determina a categoria de uma demanda a partir dos campos grupo_atual
     (grupo_nome internamente) e grupo_anterior.
 
     Regras em ordem de prioridade:
-    1. Se grupo_nome == "Finalizadas", a origem real é grupo_anterior.
-    2. Se grupo_anterior está em _GRUPO_ANTERIOR_EXTRAS → "Extras".
-    3. Se a origem está mapeada em GROUP_TO_CATEGORY → usa o mapeamento.
-    4. Qualquer grupo não mapeado (incluindo vazio, desconhecido,
-       _outros e _finalizadas_sem_origem do comportamento anterior)
-       → "Extras", pois tudo que não pertence a Base/Análises/Planejamento/
-       Diagnóstico/Cronograma é considerado Extra por definição de negócio.
+    1. grupo_atual == "Cronograma Atual" → usa grupo_anterior como origem,
+       pois "Cronograma Atual" é um estado operacional temporário e a demanda
+       pertence ao indicador do grupo de onde veio.
+    2. grupo_atual == "Finalizadas" → usa grupo_anterior como origem,
+       pois a demanda foi movida para fora do seu grupo original.
+    3. Nos demais casos → usa grupo_atual como origem.
+    4. Se a origem estiver mapeada em GROUP_TO_CATEGORY → usa o mapeamento.
+    5. Origem vazia ou não mapeada → "Extras" (tudo que não pertence a
+       Base/Análises/Planejamento/Diagnóstico/Cronograma é Extra).
     """
     grupo_nome = (grupo_nome or "").strip()
     grupo_anterior = (grupo_anterior or "").strip()
 
-    # Determina a origem real da demanda
-    base_source = grupo_anterior if grupo_nome == "Finalizadas" else grupo_nome
-
-    # grupo_anterior especial → sempre Extras
-    if grupo_anterior in _GRUPO_ANTERIOR_EXTRAS:
-        return "Extras"
+    # Grupos em que a origem real está em grupo_anterior
+    use_anterior = grupo_nome in ("Cronograma Atual", "Finalizadas")
+    base_source = grupo_anterior if use_anterior else grupo_nome
 
     # Origem mapeada explicitamente
     if base_source in GROUP_TO_CATEGORY:
         return GROUP_TO_CATEGORY[base_source]
 
-    # Tudo que não foi mapeado (grupos desconhecidos, vazios,
-    # "Finalizadas" sem origem rastreável, etc.) → Extras
+    # Origem vazia ou não mapeada → Extras
     return "Extras"
 
 
@@ -418,7 +409,7 @@ def _build_atualizacao(df: pd.DataFrame) -> list[dict[str, Any]]:
             "ultima_etapa": str(row.get("ultima_etapa") or row.get("item_nome") or ""),
             "data_atualizacao": row.get("ultima_atualizacao_dt"),
         }
-        for row in latest.head(3).to_dict(orient="records")
+        for row in latest.head(100).to_dict(orient="records")
     ]
 
 
