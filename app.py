@@ -10,14 +10,12 @@ from ui.render import inject_global_css, render_dashboard_html
 
 REFRESH_MS = 5 * 60 * 1000
 
-DEFAULT_SHEETS = {
-    "resumo": "Resumo",
-    "atualizacao": "Atualizacao_clientes",
-    "atrasos": "Atrasos_por_cliente",
-    "cronograma": "df_preparado",
-}
+# ID da planilha Google Sheets
+GSHEET_ID = "1bZsOLP2Yi0HdqytKgkT6s2c6P56W3vil_LqGNKVpzkE"
 
-CRONOGRAMA_FALLBACKS = ("CRONOGRAMA_GF&P", "base_demandas")
+# Nome da aba principal + fallbacks caso a aba mude
+CRONOGRAMA_SHEET = "base_demanda"
+CRONOGRAMA_FALLBACKS = ("df_preparado", "CRONOGRAMA_GF&P", "base_demandas")
 
 
 def hide_streamlit_chrome() -> None:
@@ -50,7 +48,6 @@ def hide_streamlit_chrome() -> None:
     )
 
 
-
 def _get_secret(key: str, default: str = "") -> str:
     try:
         value = st.secrets.get(key, default)
@@ -64,39 +61,19 @@ hide_streamlit_chrome()
 inject_global_css()
 st_autorefresh(interval=REFRESH_MS, key="dashboard-cronogramas-refresh")
 
-url = _get_secret("SHEETS_WEBAPP_URL")
-token = _get_secret("SHEETS_WEBAPP_TOKEN")
-
-resumo_sheet = _get_secret("SHEETS_RESUMO_SHEET", DEFAULT_SHEETS["resumo"])
-atualizacao_sheet = _get_secret("SHEETS_ATUALIZACAO_SHEET", DEFAULT_SHEETS["atualizacao"])
-atrasos_sheet = _get_secret("SHEETS_ATRASOS_SHEET", DEFAULT_SHEETS["atrasos"])
-cronograma_sheet = _get_secret("SHEETS_CRONOGRAMA_SHEET", DEFAULT_SHEETS["cronograma"])
-
-local_base_file = _get_secret("LOCAL_BASE_FILE")
-local_cronograma_file = _get_secret("LOCAL_CRONOGRAMA_FILE")
-
-if (not url or not token) and not (local_base_file or local_cronograma_file):
-    st.error(
-        "Configure SHEETS_WEBAPP_URL e SHEETS_WEBAPP_TOKEN no secrets.toml, ou informe LOCAL_BASE_FILE / LOCAL_CRONOGRAMA_FILE para uso local."
-    )
-    st.stop()
+# Permite sobrescrever via secrets.toml se necessário
+gsheet_id = _get_secret("GSHEET_ID", GSHEET_ID)
+cronograma_sheet = _get_secret("SHEETS_CRONOGRAMA_SHEET", CRONOGRAMA_SHEET)
 
 bundle = fetch_dashboard_bundle(
-    url=url,
-    token=token,
-    resumo_sheet=resumo_sheet,
-    atualizacao_sheet=atualizacao_sheet,
-    atrasos_sheet=atrasos_sheet,
+    gsheet_id=gsheet_id,
     cronograma_sheet=cronograma_sheet,
     cronograma_fallbacks=CRONOGRAMA_FALLBACKS,
-    local_base_file=local_base_file,
-    local_cronograma_file=local_cronograma_file,
 )
 
 if not bundle.get("ok"):
     st.error(bundle.get("message") or "Falha ao carregar o Dashboard de Cronogramas.")
-    details = bundle.get("details") or bundle
-    st.json(details)
+    st.json(bundle.get("details") or bundle)
     st.stop()
 
 cronograma_records = bundle.get("datasets", {}).get("cronograma", [])

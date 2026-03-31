@@ -27,25 +27,20 @@ class FilterState:
         return self.consultor == ALL_OPTION and self.time == ALL_OPTION and self.cliente == ALL_OPTION
 
 
-
 def _to_df(records: list[dict[str, Any]] | None) -> pd.DataFrame:
     return pd.DataFrame(records or [])
-
 
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-
 def _normalize_resumo_value(value: Any) -> float:
     if isinstance(value, (int, float)):
         return float(value)
-
     text = _text(value).replace("%", "").replace(" ", "")
     if not text:
         return 0.0
-
     if "," in text and "." in text:
         if text.rfind(",") > text.rfind("."):
             text = text.replace(".", "").replace(",", ".")
@@ -53,12 +48,10 @@ def _normalize_resumo_value(value: Any) -> float:
             text = text.replace(",", "")
     elif "," in text:
         text = text.replace(",", ".")
-
     try:
         return float(text)
     except ValueError:
         return 0.0
-
 
 
 def build_filter_options(cronograma_records: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -73,7 +66,10 @@ def build_filter_options(cronograma_records: list[dict[str, Any]]) -> dict[str, 
     def _options(column: str) -> list[str]:
         if column not in df.columns:
             return [ALL_OPTION]
-        values = sorted({_text(v) for v in df[column].dropna().tolist() if _text(v)}, key=lambda x: x.casefold())
+        values = sorted(
+            {_text(v) for v in df[column].dropna().tolist() if _text(v)},
+            key=lambda x: x.casefold(),
+        )
         return [ALL_OPTION, *values]
 
     return {
@@ -83,12 +79,10 @@ def build_filter_options(cronograma_records: list[dict[str, Any]]) -> dict[str, 
     }
 
 
-
 def apply_filters(cronograma_records: list[dict[str, Any]], filters: FilterState) -> pd.DataFrame:
     df = _to_df(cronograma_records)
     if df.empty:
         return df
-
     if filters.consultor != ALL_OPTION:
         df = df[df["responsavel"].fillna("").astype(str) == filters.consultor]
     if filters.time != ALL_OPTION:
@@ -96,7 +90,6 @@ def apply_filters(cronograma_records: list[dict[str, Any]], filters: FilterState
     if filters.cliente != ALL_OPTION:
         df = df[df["empresa_gfp"].fillna("").astype(str) == filters.cliente]
     return df.reset_index(drop=True)
-
 
 
 def _resumo_lookup(resumo_records: list[dict[str, Any]]) -> dict[str, float]:
@@ -108,19 +101,27 @@ def _resumo_lookup(resumo_records: list[dict[str, Any]]) -> dict[str, float]:
     return resumo
 
 
-
 def _format_stage_rows(df: pd.DataFrame, limit: int = 3) -> list[dict[str, Any]]:
+    """Formata linhas de atualização. Aceita data_atualizacao ou ultima_atualizacao_dt."""
     if df.empty:
         return []
 
     work = df.copy()
-    work["data_atualizacao"] = pd.to_datetime(work["data_atualizacao"], errors="coerce")
+
+    # Suporta ambos os nomes de coluna de data
+    date_col = None
+    for candidate in ("data_atualizacao", "ultima_atualizacao_dt"):
+        if candidate in work.columns:
+            date_col = candidate
+            break
+
+    if date_col:
+        work[date_col] = pd.to_datetime(work[date_col], errors="coerce")
+        work = work.sort_values(date_col, ascending=False, na_position="last")
+
     company_col = "empresa_gfp_clean" if "empresa_gfp_clean" in work.columns else "empresa_gfp"
     stage_col = "ultima_etapa" if "ultima_etapa" in work.columns else "item_nome"
 
-    available = [company_col, stage_col, "data_atualizacao"]
-    work = work[[col for col in available if col in work.columns]].copy()
-    work = work.sort_values("data_atualizacao", ascending=False, na_position="last")
     return [
         {
             "cliente": _text(row.get(company_col)),
@@ -130,15 +131,16 @@ def _format_stage_rows(df: pd.DataFrame, limit: int = 3) -> list[dict[str, Any]]
     ]
 
 
-
 def _format_delay_rows(df: pd.DataFrame, limit: int = 4) -> list[dict[str, Any]]:
     if df.empty:
         return []
-
     work = df.copy()
     company_col = "empresa_gfp_clean" if "empresa_gfp_clean" in work.columns else "empresa_gfp"
-    work = work[[col for col in [company_col, "qtd_atraso", "max_dias_atraso"] if col in work.columns]].copy()
-    work = work.sort_values(["max_dias_atraso", "qtd_atraso", company_col], ascending=[False, False, True], na_position="last")
+    cols = [col for col in [company_col, "qtd_atraso", "max_dias_atraso"] if col in work.columns]
+    work = work[cols].copy()
+    sort_cols = [c for c in ["max_dias_atraso", "qtd_atraso", company_col] if c in work.columns]
+    asc = [False] * (len(sort_cols) - 1) + [True]
+    work = work.sort_values(sort_cols, ascending=asc, na_position="last")
     return [
         {
             "cliente": _text(row.get(company_col)),
@@ -149,15 +151,15 @@ def _format_delay_rows(df: pd.DataFrame, limit: int = 4) -> list[dict[str, Any]]
     ]
 
 
-
 def _build_filtered_updates(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
     if filtered_df.empty:
         return []
-
     work = filtered_df.copy()
-    work = work.sort_values("ultima_atualizacao_dt", ascending=False, na_position="last")
+    if "ultima_atualizacao_dt" in work.columns:
+        work = work.sort_values("ultima_atualizacao_dt", ascending=False, na_position="last")
     latest = work.groupby("empresa_gfp", as_index=False).first()
-    latest = latest.sort_values("ultima_atualizacao_dt", ascending=False, na_position="last")
+    if "ultima_atualizacao_dt" in latest.columns:
+        latest = latest.sort_values("ultima_atualizacao_dt", ascending=False, na_position="last")
     return [
         {
             "cliente": _text(row.get("empresa_gfp")),
@@ -167,21 +169,17 @@ def _build_filtered_updates(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
-
 def _build_filtered_delays(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
     if filtered_df.empty or "em_atraso" not in filtered_df.columns:
         return []
-
     delayed = filtered_df[filtered_df["em_atraso"].fillna(False)].copy()
     if delayed.empty:
         return []
-
     grouped = (
         delayed.groupby("empresa_gfp", as_index=False)
         .agg(qtd_atraso=("empresa_gfp", "size"), max_dias_atraso=("dias_atraso", "max"))
         .sort_values(["max_dias_atraso", "qtd_atraso", "empresa_gfp"], ascending=[False, False, True])
     )
-
     return [
         {
             "cliente": _text(row.get("empresa_gfp")),
@@ -190,7 +188,6 @@ def _build_filtered_delays(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
         }
         for row in grouped.head(4).to_dict(orient="records")
     ]
-
 
 
 def calculate_dashboard_state(
@@ -259,9 +256,11 @@ def calculate_dashboard_state(
     else:
         work = filtered_df.copy()
         finalizadas = int(work["finalizada"].fillna(False).sum()) if not work.empty else 0
-        pending_mask = (~work["finalizada"].fillna(False)) & (work["categoria"].fillna("") != "_outros") & (work["categoria"].fillna("") != "_cronograma")
+        pending_mask = (
+            (~work["finalizada"].fillna(False))
+            & (~work["categoria"].fillna("").isin(["_outros", "_cronograma"]))
+        )
         pendentes = int(pending_mask.sum()) if not work.empty else 0
-
         cron_df = work[work["categoria"].fillna("") == "_cronograma"]
         per_client = cron_df.groupby("empresa_gfp").size() if not cron_df.empty else pd.Series(dtype="int64")
         clientes_menos_3_final = int((per_client < 3).sum()) if not per_client.empty else 0
