@@ -9,6 +9,18 @@ import pandas as pd
 import requests
 import streamlit as st
 
+# Constantes de negócio — espelhadas em metrics.py (manter sincronizadas)
+_DONE_STATUS_VALUES: frozenset[str] = frozenset({
+    "feito", "done", "concluído", "concluido", "finalizado", "finalizada",
+})
+_DEFAULT_MIN_FINALIZADAS: int = 5
+_DEFAULT_MIN_CRONOGRAMA: int = 3
+
+
+def _is_done(status_value: Any) -> bool:
+    """Retorna True quando o valor da coluna 'status' indica conclusão."""
+    return str(status_value or "").strip().lower() in _DONE_STATUS_VALUES
+
 
 DEFAULT_TIMEOUT = 25
 CACHE_TTL_SECONDS = 240
@@ -125,18 +137,44 @@ GROUP_TO_CATEGORY = {
     "Cronograma Atual": "_cronograma",
 }
 
+# Valores de grupo_anterior que forçam categoria "Extras"
+_GRUPO_ANTERIOR_EXTRAS: frozenset[str] = frozenset({
+    "[sem movimentação registrada]",
+    "Cronograma Atual",
+})
+
 
 def _infer_category(grupo_nome: str, grupo_anterior: str) -> str:
+    """
+    Determina a categoria de uma demanda a partir dos campos grupo_atual
+    (grupo_nome internamente) e grupo_anterior.
+
+    Regras em ordem de prioridade:
+    1. Se grupo_nome == "Finalizadas", a origem real é grupo_anterior.
+    2. Se grupo_anterior está em _GRUPO_ANTERIOR_EXTRAS → "Extras".
+    3. Se a origem está mapeada em GROUP_TO_CATEGORY → usa o mapeamento.
+    4. Qualquer grupo não mapeado (incluindo vazio, desconhecido,
+       _outros e _finalizadas_sem_origem do comportamento anterior)
+       → "Extras", pois tudo que não pertence a Base/Análises/Planejamento/
+       Diagnóstico/Cronograma é considerado Extra por definição de negócio.
+    """
     grupo_nome = (grupo_nome or "").strip()
     grupo_anterior = (grupo_anterior or "").strip()
+
+    # Determina a origem real da demanda
     base_source = grupo_anterior if grupo_nome == "Finalizadas" else grupo_nome
-    if base_source == "[sem movimentação registrada]" and grupo_nome == "Finalizadas":
-        return "_finalizadas_sem_origem"
+
+    # grupo_anterior especial → sempre Extras
+    if grupo_anterior in _GRUPO_ANTERIOR_EXTRAS:
+        return "Extras"
+
+    # Origem mapeada explicitamente
     if base_source in GROUP_TO_CATEGORY:
         return GROUP_TO_CATEGORY[base_source]
-    if not base_source:
-        return "_outros"
-    return "_outros"
+
+    # Tudo que não foi mapeado (grupos desconhecidos, vazios,
+    # "Finalizadas" sem origem rastreável, etc.) → Extras
+    return "Extras"
 
 
 def prepare_cronograma_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -150,11 +188,6 @@ def prepare_cronograma_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     work = df.copy()
     work.columns = [str(col).strip() for col in work.columns]
-
-    # Mapeia colunas do Sheets para os nomes internos esperados
-    # grupo_atual → grupo_nome
-    # ultima_atualizacao → ultima_atualizacao_dt
-    # previsao_entrega → previsao_dt
 
     empresa = _clean_string_series(_coalesce(work, "empresa_gfp", "cliente", default=""))
     responsavel = _clean_string_series(_coalesce(work, "responsavel", "consultor", default=""))
@@ -182,20 +215,27 @@ def prepare_cronograma_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     })
 
     if "categoria" in work.columns:
-        out["categoria"] = _clean_string_series(work["categoria"])
+        # Mesmo quando a coluna já vem preenchida, aplica a regra de
+        # grupo_anterior para garantir consistência
+        out["categoria"] = [
+            _infer_category(gn, ga) if _clean_string_series(pd.Series([cat])).iloc[0] in ("_outros", "_finalizadas_sem_origem", "")
+            else _clean_string_series(pd.Series([cat])).iloc[0]
+            for gn, ga, cat in zip(out["grupo_nome"], out["grupo_anterior"], _clean_string_series(work["categoria"]))
+        ]
     else:
         out["categoria"] = [
             _infer_category(gn, ga)
             for gn, ga in zip(out["grupo_nome"], out["grupo_anterior"])
         ]
 
+    # finalizada: derivada da coluna status para consistência com metrics.py
     if "finalizada" in work.columns:
         raw = work["finalizada"]
         out["finalizada"] = raw.map(
             lambda v: str(v).strip().lower() in {"true", "1", "sim", "yes"} if pd.notna(v) else False
         )
     else:
-        out["finalizada"] = (out["grupo_nome"] == "Finalizadas") | (out["status"] == "Feito")
+        out["finalizada"] = out["status"].fillna("").apply(_is_done)
 
     today = pd.Timestamp.now(tz="America/Sao_Paulo").tz_localize(None).normalize()
     out["dias_atraso"] = (today - out["previsao_dt"].dt.normalize()).dt.days
@@ -231,7 +271,6 @@ def fetch_dashboard_bundle(
     sem necessidade de abas separadas.
     """
     try:
-        # Tenta a aba preferida, depois os fallbacks
         cron_payload = None
         cron_sheet_used = cronograma_sheet
         last_error: Exception | None = None
@@ -258,20 +297,14 @@ def fetch_dashboard_bundle(
 
         cronograma_df = prepare_cronograma_dataframe(dataframe_from_payload(cron_payload))
 
-        # Deriva updated_at do próprio cronograma
         updated_at = ""
         if "ultima_atualizacao_dt" in cronograma_df.columns and not cronograma_df.empty:
             parsed = pd.to_datetime(cronograma_df["ultima_atualizacao_dt"], errors="coerce")
             if parsed.notna().any():
                 updated_at = pd.Timestamp(parsed.max()).strftime("%d/%m/%Y %H:%M")
 
-        # Gera resumo calculado dinamicamente a partir do cronograma
         resumo_records = _build_resumo(cronograma_df)
-
-        # Gera atualizacao: top 3 itens mais recentemente atualizados
         atualizacao_records = _build_atualizacao(cronograma_df)
-
-        # Gera atrasos: agrupado por empresa
         atrasos_records = _build_atrasos(cronograma_df)
 
         return {
@@ -306,56 +339,72 @@ def fetch_dashboard_bundle(
 
 CONCLUSION_CATEGORIES = ["Base", "Análises", "Planejamento", "Extras"]
 
+# Categorias internas que não participam dos indicadores de conclusão
+_EXCLUDE_FROM_INDICATORS: frozenset[str] = frozenset({"_cronograma", "Diagnóstico"})
+
 
 def _build_resumo(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """Gera os registros de resumo calculados a partir do cronograma."""
+    """
+    Gera os registros de resumo calculados a partir do cronograma.
+
+    Regras de negócio:
+    - % conclusão por categoria: via coluna 'status' (DONE_STATUS_VALUES),
+      não a coluna booleana 'finalizada'.
+    - Pendentes: demandas não concluídas fora das categorias internas
+      (_cronograma, Diagnóstico).
+    - Clientes com menos de 5 finalizadas: conta por empresa_gfp.
+    """
     records = []
+
+    label_map = {
+        "Base": "% conclusão — Base",
+        "Análises": "% conclusão — Análises",
+        "Planejamento": "% conclusão — Planejamento",
+        "Extras": "% conclusão — Extras",
+    }
 
     for category in CONCLUSION_CATEGORIES:
         cat_df = df[df["categoria"].fillna("") == category]
         total = len(cat_df)
-        finalizadas = int(cat_df["finalizada"].fillna(False).sum()) if total else 0
-        pct = (finalizadas / total * 100.0) if total else 0.0
-        label_map = {
-            "Base": "% conclusão — Base",
-            "Análises": "% conclusão — Análises",
-            "Planejamento": "% conclusão — Planejamento",
-            "Extras": "% conclusão — Extras",
-        }
+        done = int(cat_df["status"].fillna("").apply(_is_done).sum()) if total else 0
+        pct = (done / total * 100.0) if total else 0.0
         records.append({"indicador": label_map[category], "valor": pct})
 
-    # Tempo médio
+    # Tempo médio (deduplicado por cliente)
     unique_clients = df[["empresa_gfp", "meses_na_ize"]].drop_duplicates(subset=["empresa_gfp"])
     tempo_medio = float(unique_clients["meses_na_ize"].dropna().mean()) if not unique_clients.empty else 0.0
     records.append({"indicador": "Tempo médio clientes (meses)", "valor": tempo_medio})
 
-    # Demandas no cronograma (categoria _cronograma)
+    # Demandas no cronograma
     cron_df = df[df["categoria"].fillna("") == "_cronograma"]
     if not cron_df.empty:
         per_client = cron_df.groupby("empresa_gfp").size()
         media = float(per_client.mean()) if not per_client.empty else 0.0
-        menos_3 = int((per_client < 3).sum()) if not per_client.empty else 0
+        menos_3 = int((per_client < _DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client.empty else 0
     else:
         media = 0.0
         menos_3 = 0
     records.append({"indicador": "Média por cliente (cronograma)", "valor": media})
     records.append({"indicador": "Clientes abaixo do mínimo", "valor": menos_3})
 
-    # Finalizadas / pendentes
-    finalizadas_total = int(df["finalizada"].fillna(False).sum())
-    pending_mask = (
-        (~df["finalizada"].fillna(False))
-        & (~df["categoria"].fillna("").isin(["_outros", "_cronograma"]))
-    )
-    pendentes = int(pending_mask.sum())
+    # Finalizadas e pendentes (universo exclui categorias internas)
+    elegivel = df[~df["categoria"].fillna("").isin(_EXCLUDE_FROM_INDICATORS)]
+    done_mask = elegivel["status"].fillna("").apply(_is_done)
+    finalizadas_total = int(done_mask.sum())
+    pendentes = int((~done_mask).sum())
     records.append({"indicador": "Demandas finalizadas (total)", "valor": finalizadas_total})
     records.append({"indicador": "Demandas pendentes", "valor": pendentes})
+
+    # Clientes com menos de DEFAULT_MIN_FINALIZADAS demandas finalizadas
+    per_client_done = elegivel[done_mask].groupby("empresa_gfp").size() if not elegivel.empty else pd.Series(dtype="int64")
+    menos_5 = int((per_client_done < _DEFAULT_MIN_FINALIZADAS).sum()) if not per_client_done.empty else 0
+    records.append({"indicador": "Clientes com menos de 5 finalizadas", "valor": menos_5})
 
     return records
 
 
 def _build_atualizacao(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """Top 3 itens mais recentemente atualizados."""
+    """Top 3 clientes por data de última atualização, independente da categoria."""
     if df.empty or "ultima_atualizacao_dt" not in df.columns:
         return []
     work = df.copy()
@@ -367,7 +416,6 @@ def _build_atualizacao(df: pd.DataFrame) -> list[dict[str, Any]]:
             "empresa_gfp": str(row.get("empresa_gfp") or ""),
             "empresa_gfp_clean": str(row.get("empresa_gfp_clean") or row.get("empresa_gfp") or ""),
             "ultima_etapa": str(row.get("ultima_etapa") or row.get("item_nome") or ""),
-            # metrics.py usa data_atualizacao — fornecemos aqui mapeado
             "data_atualizacao": row.get("ultima_atualizacao_dt"),
         }
         for row in latest.head(3).to_dict(orient="records")
@@ -375,10 +423,17 @@ def _build_atualizacao(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 def _build_atrasos(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """Atrasos agrupados por empresa."""
+    """
+    Atrasos agrupados por empresa.
+    Apenas demandas COM previsao_dt registrada e NÃO concluídas via status.
+    """
     if df.empty or "em_atraso" not in df.columns:
         return []
-    delayed = df[df["em_atraso"].fillna(False)].copy()
+    delayed = df[
+        df["em_atraso"].fillna(False)
+        & df["previsao_dt"].notna()
+        & ~df["status"].fillna("").apply(_is_done)
+    ].copy()
     if delayed.empty:
         return []
     grouped = (

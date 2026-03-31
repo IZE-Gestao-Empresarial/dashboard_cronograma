@@ -42,11 +42,8 @@ def _to_finite_number(value: float | int | None) -> float | None:
 def _fmt_percent(value: float | int | None) -> str:
     num = _to_finite_number(value)
     if num is None:
-        return "0%"
-    if abs(num - round(num)) < 0.05:
-        return f"{int(round(num))}%"
-    text = f"{num:.1f}".replace(".", ",")
-    return f"{text}%"
+        return '0<span class="conclusion-tile__percent">%</span>'
+    return f'{int(round(num))}<span class="conclusion-tile__percent">%</span>'
 
 
 def _fmt_decimal(value: float | int | None) -> str:
@@ -112,56 +109,76 @@ def _render_atraso_rows(rows: list[dict[str, str | int]]) -> str:
     return "".join(html)
 
 
-def _polar_to_cartesian(cx: float, cy: float, r: float, angle_deg: float) -> tuple[float, float]:
-    angle = math.radians(angle_deg)
-    return (cx + r * math.cos(angle), cy + r * math.sin(angle))
+# ---------------------------------------------------------------------------
+# Gauge — segmentos em forma de pílula (path SVG com bordas arredondadas)
+# Baseado no gauge.py do dashboard de referência.
+# ---------------------------------------------------------------------------
 
-
-def _arc_path(cx: float, cy: float, r: float, start_angle: float, end_angle: float) -> str:
-    start = _polar_to_cartesian(cx, cy, r, start_angle)
-    end = _polar_to_cartesian(cx, cy, r, end_angle)
-    large_arc_flag = 1 if abs(end_angle - start_angle) > 180 else 0
-    sweep_flag = 1
-    return f"M {start[0]:.2f} {start[1]:.2f} A {r:.2f} {r:.2f} 0 {large_arc_flag} {sweep_flag} {end[0]:.2f} {end[1]:.2f}"
+# Path de uma cápsula/pílula (78×160 px, bordas superiores arredondadas).
+# Cada segmento é este shape escalado e rotacionado para a posição correta no arco.
+_GAUGE_PILL_D = (
+    "M62.8002 0C71.6745 0 78.6088 7.66227 77.7257 16.4926"
+    "L64.7257 146.493C63.9589 154.161 57.5065 160 49.8002 160"
+    "H28.4077C20.7192 160 14.2755 154.187 13.4868 146.539"
+    "L0.0805531 16.5387C-0.831684 7.69276 6.10858 0 15.0014 0"
+    "L62.8002 0Z"
+)
 
 
 def _render_gauge(percentage: float | int | None) -> str:
-    pct = _to_finite_number(percentage) or 0.0
-    segments = 12
-    filled = int(round((max(0.0, min(100.0, pct)) / 100.0) * segments))
-    filled = max(0, min(segments, filled))
-    gap = 4.0
-    start = 180.0
-    end = 360.0
-    span = end - start
-    seg_size = (span - gap * (segments - 1)) / segments
+    pct = max(0.0, min(100.0, _to_finite_number(percentage) or 0.0))
 
-    paths = []
-    angle = start
-    for idx in range(segments):
-        seg_start = angle
-        seg_end = angle + seg_size
-        css = "gauge-segment--filled" if idx < filled else "gauge-segment--empty"
-        paths.append(
-            f'<path d="{_arc_path(110, 118, 70, seg_start, seg_end)}" class="gauge-segment {css}" />'
+    segments   = 13       # quantidade de pílulas
+    seg_len    = 42.0     # comprimento radial de cada pílula (px no viewBox)
+    r_inner    = 75.0     # raio do ponto de ancoragem de cada pílula
+    arc_start  = 185.0    # ângulo de início do arco (graus)
+    arc_end    = 355.0    # ângulo de fim do arco (graus)
+
+    # Dimensões do path base (não alterar — são as do _GAUGE_PILL_D)
+    base_w, base_h = 78.0, 160.0
+
+    filled_count = int(round((pct / 100.0) * segments))
+    scale = seg_len / base_h
+    step  = (arc_end - arc_start) / float(segments)
+
+    # ViewBox fixo — o CSS controla o tamanho real via .gauge-svg
+    vb_w, vb_h = 240, 160
+    cx, cy = 120, 123   # centro do arco dentro do viewBox
+
+    segs = []
+    for i in range(segments):
+        ang = arc_start + (i + 0.5) * step
+        rad = math.radians(ang)
+        x   = cx + r_inner * math.cos(rad)
+        y   = cy + r_inner * math.sin(rad)
+        color = "#f26419" if i < filled_count else "#e0ddd9"
+        segs.append(
+            f'<g transform="'
+            f'translate({x:.2f} {y:.2f}) '
+            f'rotate({ang + 90:.2f}) '
+            f'scale({scale:.4f}) '
+            f'translate({-base_w / 2:.2f} {-base_h:.2f})'
+            f'">'
+            f'<path d="{_GAUGE_PILL_D}" fill="{color}"/>'
+            f'</g>'
         )
-        angle = seg_end + gap
 
     return (
-        f'<svg class="gauge-svg" viewBox="0 0 220 135" aria-hidden="true" focusable="false">'
-        f'{"".join(paths)}'
+        f'<svg class="gauge-svg" viewBox="0 0 {vb_w} {vb_h}" '
+        f'aria-hidden="true" focusable="false">'
+        f'{"".join(segs)}'
         f'</svg>'
     )
 
 
 def render_dashboard_html(state: dict, updated_at: str | None = None) -> str:
     cards = state.get("cards", {})
-    conclusao = cards.get("conclusao", {})
-    tempo_medio = cards.get("tempo_medio", 0.0)
-    cronograma = cards.get("cronograma", {})
-    finalizadas = cards.get("finalizadas", {})
+    conclusao      = cards.get("conclusao", {})
+    tempo_medio    = cards.get("tempo_medio", 0.0)
+    cronograma     = cards.get("cronograma", {})
+    finalizadas    = cards.get("finalizadas", {})
     atualizacao_rows = cards.get("atualizacao", [])
-    atraso_rows = cards.get("atrasos", [])
+    atraso_rows      = cards.get("atrasos", [])
 
     html = f"""
     <div class="cronogramas-canvas">

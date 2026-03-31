@@ -15,6 +15,23 @@ CONCLUSION_INDICATORS = {
     "Extras": "% conclusão — Extras",
 }
 
+# Valores de status que indicam conclusão (comparados em lowercase)
+DONE_STATUS_VALUES: frozenset[str] = frozenset({
+    "feito", "done", "concluído", "concluido", "finalizado", "finalizada",
+})
+
+# Limite padrão de demandas finalizadas para alerta de clientes
+DEFAULT_MIN_FINALIZADAS = 5
+
+# Limite padrão de demandas no cronograma para alerta de clientes
+DEFAULT_MIN_CRONOGRAMA = 3
+
+# Valores de grupo_anterior que reclassificam a demanda para "Extras"
+_GRUPO_ANTERIOR_EXTRAS: frozenset[str] = frozenset({
+    "[sem movimentação registrada]",
+    "Cronograma Atual",
+})
+
 
 @dataclass
 class FilterState:
@@ -35,6 +52,11 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _is_done(status_value: Any) -> bool:
+    """Retorna True quando o valor da coluna 'status' indica conclusão."""
+    return _text(status_value).lower() in DONE_STATUS_VALUES
+
+
 def _normalize_resumo_value(value: Any) -> float:
     if isinstance(value, (int, float)):
         return float(value)
@@ -52,6 +74,20 @@ def _normalize_resumo_value(value: Any) -> float:
         return float(text)
     except ValueError:
         return 0.0
+
+
+def resolve_categoria(grupo_nome: str, grupo_anterior: str, categoria_atual: str) -> str:
+    """
+    Pós-processamento de categoria: quando grupo_anterior for
+    '[sem movimentação registrada]' ou 'Cronograma Atual', a demanda
+    é reclassificada como 'Extras' independente do grupo_nome.
+
+    Chamado em data.py após _infer_category para garantir que o dataframe
+    do cronograma já chegue ao metrics.py com a categoria correta.
+    """
+    if _text(grupo_anterior) in _GRUPO_ANTERIOR_EXTRAS:
+        return "Extras"
+    return categoria_atual
 
 
 def build_filter_options(cronograma_records: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -172,7 +208,12 @@ def _build_filtered_updates(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
 def _build_filtered_delays(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
     if filtered_df.empty or "em_atraso" not in filtered_df.columns:
         return []
-    delayed = filtered_df[filtered_df["em_atraso"].fillna(False)].copy()
+    # Apenas demandas COM previsao_dt registrada e NÃO concluídas
+    delayed = filtered_df[
+        filtered_df["em_atraso"].fillna(False)
+        & filtered_df["previsao_dt"].notna()
+        & ~filtered_df["status"].fillna("").apply(_is_done)
+    ].copy()
     if delayed.empty:
         return []
     grouped = (
@@ -190,6 +231,80 @@ def _build_filtered_delays(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
+def _build_tabela_clientes(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
+    """
+    Tabela consolidada por cliente com:
+    - empresa_gfp, responsavel, area, meses_na_ize
+    - total_demandas, finalizadas, pendentes (universo exclui _outros e _cronograma)
+    - em_atraso, max_dias_atraso (só demandas com previsao_dt e não concluídas)
+    - ultima_atualizacao: data da última modificação, independente da categoria
+    - pct_conclusao: % de conclusão do cliente
+    """
+    if filtered_df.empty:
+        return []
+
+    exclude = {"_outros", "_cronograma"}
+    work = filtered_df[~filtered_df["categoria"].fillna("").isin(exclude)].copy()
+
+    if work.empty:
+        return []
+
+    work["_done"] = work["status"].fillna("").apply(_is_done)
+
+    agg: dict[str, Any] = {
+        "total_demandas": ("empresa_gfp", "size"),
+        "finalizadas": ("_done", "sum"),
+    }
+    if "responsavel" in work.columns:
+        agg["responsavel"] = ("responsavel", "first")
+    if "area" in work.columns:
+        agg["area"] = ("area", "first")
+    if "meses_na_ize" in work.columns:
+        agg["meses_na_ize"] = ("meses_na_ize", "first")
+
+    base = work.groupby("empresa_gfp", as_index=False).agg(**agg)
+    base["finalizadas"] = base["finalizadas"].astype(int)
+    base["pendentes"] = base["total_demandas"] - base["finalizadas"]
+    base["pct_conclusao"] = (base["finalizadas"] / base["total_demandas"] * 100.0).round(1)
+
+    # Última atualização vem do df completo (independe de categoria)
+    if "ultima_atualizacao_dt" in filtered_df.columns:
+        last_upd = (
+            filtered_df.groupby("empresa_gfp")["ultima_atualizacao_dt"]
+            .max()
+            .reset_index()
+            .rename(columns={"ultima_atualizacao_dt": "ultima_atualizacao"})
+        )
+        base = base.merge(last_upd, on="empresa_gfp", how="left")
+        base["ultima_atualizacao"] = pd.to_datetime(
+            base["ultima_atualizacao"], errors="coerce"
+        ).dt.strftime("%d/%m/%Y %H:%M")
+
+    # Atrasos: só com prazo registrado e não concluídas
+    if "em_atraso" in filtered_df.columns and "dias_atraso" in filtered_df.columns:
+        delayed = filtered_df[
+            filtered_df["previsao_dt"].notna()
+            & ~filtered_df["status"].fillna("").apply(_is_done)
+            & filtered_df["em_atraso"].fillna(False)
+        ].copy()
+        if not delayed.empty:
+            atraso_agg = (
+                delayed.groupby("empresa_gfp", as_index=False)
+                .agg(em_atraso=("empresa_gfp", "size"), max_dias_atraso=("dias_atraso", "max"))
+            )
+            base = base.merge(atraso_agg, on="empresa_gfp", how="left")
+        base["em_atraso"] = base.get("em_atraso", 0)
+        base["max_dias_atraso"] = base.get("max_dias_atraso", 0)
+        base["em_atraso"] = base["em_atraso"].fillna(0).astype(int)
+        base["max_dias_atraso"] = base["max_dias_atraso"].fillna(0).astype(int)
+    else:
+        base["em_atraso"] = 0
+        base["max_dias_atraso"] = 0
+
+    base = base.sort_values("empresa_gfp", key=lambda s: s.str.casefold())
+    return base.to_dict(orient="records")
+
+
 def calculate_dashboard_state(
     *,
     resumo_records: list[dict[str, Any]],
@@ -201,7 +316,13 @@ def calculate_dashboard_state(
     resumo = _resumo_lookup(resumo_records)
     filtered_df = apply_filters(cronograma_records, filters)
 
+    # ------------------------------------------------------------------
     # Conclusão de etapas
+    # Regra: usa coluna 'status' (DONE_STATUS_VALUES), não 'finalizada'.
+    # No modo is_all, lê os valores pré-calculados do resumo (já derivados
+    # com a mesma lógica em data._build_resumo) para evitar reprocessar
+    # o dataframe completo.
+    # ------------------------------------------------------------------
     if filters.is_all:
         conclusao = {
             category: resumo.get(indicator, 0.0)
@@ -212,29 +333,40 @@ def calculate_dashboard_state(
         for category in CONCLUSION_ORDER:
             cat_df = filtered_df[filtered_df["categoria"].fillna("") == category]
             total = len(cat_df)
-            finalizadas = int(cat_df["finalizada"].fillna(False).sum()) if total else 0
-            conclusao[category] = (finalizadas / total * 100.0) if total else 0.0
+            if total == 0:
+                conclusao[category] = 0.0
+                continue
+            done = cat_df["status"].fillna("").apply(_is_done).sum()
+            conclusao[category] = done / total * 100.0
 
-    # Atualização
+    # ------------------------------------------------------------------
+    # Atualização recente — independente da categoria
+    # ------------------------------------------------------------------
     if filters.is_all:
         atualizacao_rows = _format_stage_rows(_to_df(atualizacao_records), limit=3)
     else:
         atualizacao_rows = _build_filtered_updates(filtered_df)
 
-    # Atrasos
+    # ------------------------------------------------------------------
+    # Atrasos — apenas demandas COM previsao_dt e NÃO concluídas
+    # ------------------------------------------------------------------
     if filters.is_all:
         atraso_rows = _format_delay_rows(_to_df(atrasos_records), limit=4)
     else:
         atraso_rows = _build_filtered_delays(filtered_df)
 
-    # Tempo médio
+    # ------------------------------------------------------------------
+    # Tempo médio — deduplicado por cliente
+    # ------------------------------------------------------------------
     if filters.is_all:
         tempo_medio = resumo.get("Tempo médio clientes (meses)", 0.0)
     else:
         unique_clients = filtered_df[["empresa_gfp", "meses_na_ize"]].drop_duplicates(subset=["empresa_gfp"])
         tempo_medio = float(unique_clients["meses_na_ize"].dropna().mean()) if not unique_clients.empty else 0.0
 
-    # Demandas no cronograma
+    # ------------------------------------------------------------------
+    # Demandas no cronograma — média por cliente por time
+    # ------------------------------------------------------------------
     if filters.is_all:
         demandas_media = resumo.get("Média por cliente (cronograma)", 0.0)
         clientes_menos_3 = int(round(resumo.get("Clientes abaixo do mínimo", 0.0)))
@@ -244,29 +376,50 @@ def calculate_dashboard_state(
             demandas_media = 0.0
             clientes_menos_3 = 0
         else:
-            per_client = cron_df.groupby("empresa_gfp").size()
+            group_cols = [c for c in ["area", "empresa_gfp"] if c in cron_df.columns]
+            per_client = cron_df.groupby(group_cols).size()
             demandas_media = float(per_client.mean()) if not per_client.empty else 0.0
-            clientes_menos_3 = int((per_client < 3).sum()) if not per_client.empty else 0
+            clientes_menos_3 = int((per_client < DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client.empty else 0
 
+    # ------------------------------------------------------------------
     # Demandas finalizadas / pendentes
+    # Regra: usa coluna 'status'. Universo exclui _outros e _cronograma.
+    # clientes_menos_5: clientes com < DEFAULT_MIN_FINALIZADAS finalizadas.
+    # ------------------------------------------------------------------
     if filters.is_all:
         finalizadas = int(round(resumo.get("Demandas finalizadas (total)", 0.0)))
         pendentes = int(round(resumo.get("Demandas pendentes", 0.0)))
         clientes_menos_3_final = int(round(resumo.get("Clientes abaixo do mínimo", 0.0)))
+        clientes_menos_5 = int(round(resumo.get("Clientes com menos de 5 finalizadas", 0.0)))
     else:
-        work = filtered_df.copy()
-        finalizadas = int(work["finalizada"].fillna(False).sum()) if not work.empty else 0
-        pending_mask = (
-            (~work["finalizada"].fillna(False))
-            & (~work["categoria"].fillna("").isin(["_outros", "_cronograma"]))
+        exclude = {"_outros", "_cronograma"}
+        work = filtered_df[~filtered_df["categoria"].fillna("").isin(exclude)].copy()
+        done_mask = work["status"].fillna("").apply(_is_done) if not work.empty else pd.Series(dtype=bool)
+        finalizadas = int(done_mask.sum()) if not work.empty else 0
+        pendentes = len(work) - finalizadas if not work.empty else 0
+
+        cron_df2 = filtered_df[filtered_df["categoria"].fillna("") == "_cronograma"]
+        if cron_df2.empty:
+            clientes_menos_3_final = 0
+        else:
+            group_cols2 = [c for c in ["area", "empresa_gfp"] if c in cron_df2.columns]
+            per_client2 = cron_df2.groupby(group_cols2).size()
+            clientes_menos_3_final = int((per_client2 < DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client2.empty else 0
+
+        per_client_done = (
+            work[done_mask].groupby("empresa_gfp").size()
+            if not work.empty
+            else pd.Series(dtype="int64")
         )
-        pendentes = int(pending_mask.sum()) if not work.empty else 0
-        cron_df = work[work["categoria"].fillna("") == "_cronograma"]
-        per_client = cron_df.groupby("empresa_gfp").size() if not cron_df.empty else pd.Series(dtype="int64")
-        clientes_menos_3_final = int((per_client < 3).sum()) if not per_client.empty else 0
+        clientes_menos_5 = int((per_client_done < DEFAULT_MIN_FINALIZADAS).sum()) if not per_client_done.empty else 0
 
     total_gauge = finalizadas + pendentes
     conclusao_total = (finalizadas / total_gauge * 100.0) if total_gauge else 0.0
+
+    # ------------------------------------------------------------------
+    # Tabela de clientes (para exibição e download)
+    # ------------------------------------------------------------------
+    tabela_clientes = _build_tabela_clientes(filtered_df)
 
     return {
         "filters": {
@@ -287,7 +440,10 @@ def calculate_dashboard_state(
                 "demandas": finalizadas,
                 "pendentes": pendentes,
                 "clientes_menos_3": clientes_menos_3_final,
+                "clientes_menos_5": clientes_menos_5,
                 "conclusao_total": conclusao_total,
             },
         },
+        # Tabela detalhada por cliente (para exibição em tela e download)
+        "tabela_clientes": tabela_clientes,
     }
