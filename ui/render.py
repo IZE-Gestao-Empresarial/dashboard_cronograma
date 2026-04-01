@@ -109,13 +109,6 @@ def _render_atraso_rows(rows: list[dict[str, str | int]]) -> str:
     return "".join(html)
 
 
-# ---------------------------------------------------------------------------
-# Gauge — segmentos em forma de pílula (path SVG com bordas arredondadas)
-# Baseado no gauge.py do dashboard de referência.
-# ---------------------------------------------------------------------------
-
-# Path de uma cápsula/pílula (78×160 px, bordas superiores arredondadas).
-# Cada segmento é este shape escalado e rotacionado para a posição correta no arco.
 _GAUGE_PILL_D = (
     "M62.8002 0C71.6745 0 78.6088 7.66227 77.7257 16.4926"
     "L64.7257 146.493C63.9589 154.161 57.5065 160 49.8002 160"
@@ -127,149 +120,120 @@ _GAUGE_PILL_D = (
 
 def _render_gauge(percentage: float | int | None) -> str:
     pct = max(0.0, min(100.0, _to_finite_number(percentage) or 0.0))
-
-    segments   = 13       # quantidade de pílulas
-    seg_len    = 42.0     # comprimento radial de cada pílula (px no viewBox)
-    r_inner    = 75.0     # raio do ponto de ancoragem de cada pílula
-    arc_start  = 185.0    # ângulo de início do arco (graus)
-    arc_end    = 355.0    # ângulo de fim do arco (graus)
-
-    # Dimensões do path base (não alterar — são as do _GAUGE_PILL_D)
+    segments = 13
+    seg_len = 42.0
+    r_inner = 75.0
+    arc_start = 185.0
+    arc_end = 355.0
     base_w, base_h = 78.0, 160.0
-
     filled_count = int(round((pct / 100.0) * segments))
     scale = seg_len / base_h
-    step  = (arc_end - arc_start) / float(segments)
-
-    # ViewBox fixo — o CSS controla o tamanho real via .gauge-svg
+    step = (arc_end - arc_start) / float(segments)
     vb_w, vb_h = 240, 160
-    cx, cy = 120, 123   # centro do arco dentro do viewBox
-
+    cx, cy = 120, 123
     segs = []
     for i in range(segments):
         ang = arc_start + (i + 0.5) * step
         rad = math.radians(ang)
-        x   = cx + r_inner * math.cos(rad)
-        y   = cy + r_inner * math.sin(rad)
+        x = cx + r_inner * math.cos(rad)
+        y = cy + r_inner * math.sin(rad)
         color = "#f26419" if i < filled_count else "#e0ddd9"
         segs.append(
-            f'<g transform="'
-            f'translate({x:.2f} {y:.2f}) '
-            f'rotate({ang + 90:.2f}) '
-            f'scale({scale:.4f}) '
-            f'translate({-base_w / 2:.2f} {-base_h:.2f})'
-            f'">'
+            f'<g transform="translate({x:.2f} {y:.2f}) rotate({ang + 90:.2f}) scale({scale:.4f}) translate({-base_w / 2:.2f} {-base_h:.2f})">'
             f'<path d="{_GAUGE_PILL_D}" fill="{color}"/>'
             f'</g>'
         )
+    return f'<svg class="gauge-svg" viewBox="0 0 {vb_w} {vb_h}" aria-hidden="true" focusable="false">{"".join(segs)}</svg>'
 
+
+def _render_card_corner_icon(toggle_id: str) -> str:
+    svg = load_asset_text("assets/svg/card_corner_icon.svg").strip()
+    return f'<label class="card-corner-link" for="{escape(toggle_id)}" aria-label="Abrir detalhamento">{svg}</label>'
+
+
+def _render_detail_table(columns: list[str], rows: list[dict[str, str]]) -> str:
+    head = ''.join(f'<th>{escape(str(col))}</th>' for col in columns)
+    if not rows:
+        body = f'<tr><td colspan="{max(1, len(columns))}" class="detail-empty-cell">Sem dados para os filtros selecionados.</td></tr>'
+    else:
+        body_rows = []
+        for row in rows:
+            cells = ''.join(f'<td>{escape(str(row.get(col, "-")))}</td>' for col in columns)
+            body_rows.append(f'<tr>{cells}</tr>')
+        body = ''.join(body_rows)
+    return f'<div class="detail-table-wrap"><table class="detail-table"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+
+
+def _render_detail_modal(detail: dict, toggle_id: str) -> str:
+    title = escape(str(detail.get("title") or "Detalhamento"))
+    download_href = str(detail.get("download_href") or "").strip()
+    download_name = escape(str(detail.get("download_name") or "detalhamento.xlsx"))
+    download_html = (
+        f'<a class="detail-download-button" href="{escape(download_href, quote=True)}" download="{download_name}">↓&nbsp;&nbsp;Baixar</a>'
+        if download_href else
+        '<span class="detail-download-button detail-download-button--disabled">↓&nbsp;&nbsp;Baixar</span>'
+    )
     return (
-        f'<svg class="gauge-svg" viewBox="0 0 {vb_w} {vb_h}" '
-        f'aria-hidden="true" focusable="false">'
-        f'{"".join(segs)}'
-        f'</svg>'
+        f'<div class="detail-overlay">'
+        f'<label class="detail-overlay__backdrop" for="{escape(toggle_id)}" aria-label="Fechar detalhamento"></label>'
+        f'<div class="detail-page" role="dialog" aria-modal="true" aria-label="{title}">'
+        f'<div class="detail-page__topbar">'
+        f'<label class="detail-page__back" for="{escape(toggle_id)}">‹ Voltar para Dashboard</label>'
+        f'<label class="detail-page__close" for="{escape(toggle_id)}" aria-label="Fechar">✕</label>'
+        f'</div>'
+        f'<div class="detail-page__header"><h1 class="detail-page__title">{title}</h1>{download_html}</div>'
+        f'{_render_detail_table(detail.get("columns", []), detail.get("rows", []))}'
+        f'</div></div>'
+    )
+
+
+def _wrap_card(content: str, detail: dict, key: str) -> str:
+    toggle_id = f'detail-toggle-{key}'
+    return (
+        f'<input type="checkbox" class="detail-toggle" id="{toggle_id}">'
+        f'{_render_card_corner_icon(toggle_id)}'
+        f'{content}'
+        f'{_render_detail_modal(detail, toggle_id)}'
     )
 
 
 def render_dashboard_html(state: dict, updated_at: str | None = None) -> str:
     cards = state.get("cards", {})
-    conclusao      = cards.get("conclusao", {})
-    tempo_medio    = cards.get("tempo_medio", 0.0)
-    cronograma     = cards.get("cronograma", {})
-    finalizadas    = cards.get("finalizadas", {})
+    details = state.get("details", {})
+    conclusao = cards.get("conclusao", {})
+    tempo_medio = cards.get("tempo_medio", 0.0)
+    cronograma = cards.get("cronograma", {})
+    finalizadas = cards.get("finalizadas", {})
     atualizacao_rows = cards.get("atualizacao", [])
-    atraso_rows      = cards.get("atrasos", [])
+    atraso_rows = cards.get("atrasos", [])
 
     html = f"""
     <div class="cronogramas-canvas">
       <section class="dash-card slot-top-left">
-        <div class="dash-card-inner">
-          <div class="card-title">% Conclusão de Etapas</div>
-          <div class="conclusion-grid">{_render_conclusion_tiles(conclusao)}</div>
-        </div>
+        {_wrap_card(f'<div class="dash-card-inner"><div class="card-title">% Conclusão de Etapas</div><div class="conclusion-grid">{_render_conclusion_tiles(conclusao)}</div></div>', details.get('conclusao', {}), 'conclusao')}
       </section>
 
       <section class="dash-card slot-top-right">
-        <div class="dash-card-inner">
-          <div class="card-title">Atualização</div>
-          <div class="table-card table-card--update">
-            <div class="table-head table-head--2cols">
-              <div>Cliente</div>
-              <div class="table-cell--right">Última Etapa</div>
-            </div>
-            {_render_atualizacao_rows(atualizacao_rows)}
-          </div>
-        </div>
+        {_wrap_card(f'<div class="dash-card-inner"><div class="card-title">Atualização</div><div class="table-card table-card--update"><div class="table-head table-head--2cols"><div>Cliente</div><div class="table-cell--right">Última Etapa</div></div>{_render_atualizacao_rows(atualizacao_rows)}</div></div>', details.get('atualizacao', {}), 'atualizacao')}
       </section>
 
       <section class="dash-card slot-left-middle">
-        <div class="dash-card-inner dash-card-inner--centered">
-          <div class="card-title">Tempo Médio Clientes</div>
-          <div class="tempo-medio-wrap">
-            <div class="tempo-medio-value">{_fmt_decimal(tempo_medio)}</div>
-            <div class="tempo-medio-unit">meses</div>
-          </div>
-        </div>
+        {_wrap_card(f'<div class="dash-card-inner dash-card-inner--centered"><div class="card-title">Tempo Médio Clientes</div><div class="tempo-medio-wrap"><div class="tempo-medio-value">{_fmt_decimal(tempo_medio)}</div><div class="tempo-medio-unit">meses</div></div></div>', details.get('tempo_medio', {}), 'tempo_medio')}
       </section>
 
       <section class="dash-card slot-left-bottom">
-        <div class="dash-card-inner">
-          <div class="card-title">Demandas no Cronograma</div>
-          <div class="cronograma-lines">
-            <div class="info-line">
-              <div class="info-line__icon info-line__icon--list"></div>
-              <div class="info-line__value">{_fmt_decimal(cronograma.get('media', 0.0))}</div>
-              <div class="info-line__label">Demandas (média)</div>
-            </div>
-            <div class="info-line">
-              <div class="info-line__icon info-line__icon--alert"></div>
-              <div class="info-line__value">{_fmt_int(cronograma.get('clientes_menos_3', 0))}</div>
-              <div class="info-line__label">Clientes com menos que 3</div>
-            </div>
-          </div>
-        </div>
+        {_wrap_card(f'<div class="dash-card-inner"><div class="card-title">Demandas no Cronograma</div><div class="cronograma-lines"><div class="info-line"><div class="info-line__icon info-line__icon--list"></div><div class="info-line__value">{_fmt_decimal(cronograma.get("media", 0.0))}</div><div class="info-line__label">Demandas (média)</div></div><div class="info-line"><div class="info-line__icon info-line__icon--alert"></div><div class="info-line__value">{_fmt_int(cronograma.get("clientes_menos_3", 0))}</div><div class="info-line__label">Clientes com menos que 3</div></div></div></div>', details.get('cronograma', {}), 'cronograma')}
       </section>
 
       <section class="dash-card slot-center">
-        <div class="dash-card-inner">
-          <div class="card-title">Demandas Finalizadas</div>
-          <div class="finalizadas-body">
-            <div class="gauge-wrap">
-              {_render_gauge(finalizadas.get('conclusao_total', 0.0))}
-              <div class="gauge-center">
-                <div class="gauge-center__value">{_fmt_int(finalizadas.get('demandas', 0))}</div>
-                <div class="gauge-center__label">Demandas</div>
-              </div>
-            </div>
-            <div class="finalizadas-footer">
-              <div class="mini-stat-card">
-                <div class="mini-stat-card__label">Demandas pendentes</div>
-                <div class="mini-stat-card__value">{_fmt_int(finalizadas.get('pendentes', 0))}</div>
-              </div>
-              <div class="mini-stat-card">
-                <div class="mini-stat-card__label">Clientes com menos que 3</div>
-                <div class="mini-stat-card__value">{_fmt_int(finalizadas.get('clientes_menos_3', 0))}</div>
-              </div>
-            </div>
-          </div>
-        </div>
+        {_wrap_card(f'<div class="dash-card-inner"><div class="card-title">Demandas Finalizadas</div><div class="finalizadas-body"><div class="gauge-wrap">{_render_gauge(finalizadas.get("conclusao_total", 0.0))}<div class="gauge-center"><div class="gauge-center__value">{_fmt_int(finalizadas.get("demandas", 0))}</div><div class="gauge-center__label">Demandas</div></div></div><div class="finalizadas-footer"><div class="mini-stat-card"><div class="mini-stat-card__label">Demandas pendentes</div><div class="mini-stat-card__value">{_fmt_int(finalizadas.get("pendentes", 0))}</div></div><div class="mini-stat-card"><div class="mini-stat-card__label">Clientes com menos que 3</div><div class="mini-stat-card__value">{_fmt_int(finalizadas.get("clientes_menos_3", 0))}</div></div></div></div></div>', details.get('finalizadas', {}), 'finalizadas')}
       </section>
 
       <section class="dash-card slot-right-bottom">
-        <div class="dash-card-inner">
-          <div class="card-title">Demandas em Atraso</div>
-          <div class="table-card table-card--delay">
-            <div class="table-head table-head--3cols">
-              <div>Cliente</div>
-              <div>Demandas</div>
-              <div class="table-cell--right">Atraso</div>
-            </div>
-            {_render_atraso_rows(atraso_rows)}
-          </div>
-        </div>
+        {_wrap_card(f'<div class="dash-card-inner"><div class="card-title">Demandas em Atraso</div><div class="table-card table-card--delay"><div class="table-head table-head--3cols"><div>Cliente</div><div>Demandas</div><div class="table-cell--right">Atraso</div></div>{_render_atraso_rows(atraso_rows)}</div></div>', details.get('atrasos', {}), 'atrasos')}
       </section>
 
-      <div class="dashboard-updated-at">{escape(updated_at or '')}</div>
+      <div class="dashboard-updated-at">{escape(updated_at or "")}</div>
     </div>
     """
-    return "".join(line.strip() for line in html.splitlines() if line.strip())
+    return ''.join(line.strip() for line in html.splitlines() if line.strip())
