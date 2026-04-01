@@ -121,26 +121,14 @@ def _attach_detail_downloads(state: dict) -> dict:
     return state
 
 
-def _get_secret(key: str, default: str = "") -> str:
-    try:
-        value = st.secrets.get(key, default)
-    except Exception:
-        return default
-    return str(value).strip() if value is not None else default
-
-
 st.set_page_config(page_title="Dashboard de Cronogramas", layout="wide")
 hide_streamlit_chrome()
 inject_global_css()
 st_autorefresh(interval=REFRESH_MS, key="dashboard-cronogramas-refresh")
 
-# Permite sobrescrever via secrets.toml se necessário
-gsheet_id = _get_secret("GSHEET_ID", GSHEET_ID)
-cronograma_sheet = _get_secret("SHEETS_CRONOGRAMA_SHEET", CRONOGRAMA_SHEET)
-
 bundle = fetch_dashboard_bundle(
-    gsheet_id=gsheet_id,
-    cronograma_sheet=cronograma_sheet,
+    gsheet_id=GSHEET_ID,
+    cronograma_sheet=CRONOGRAMA_SHEET,
     cronograma_fallbacks=CRONOGRAMA_FALLBACKS,
 )
 
