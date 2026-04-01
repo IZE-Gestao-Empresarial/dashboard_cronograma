@@ -7,7 +7,7 @@
   --muted: #666666;
   --line: rgba(0, 0, 0, 0.08);
   --soft-line: rgba(0, 0, 0, 0.05);
-  --orange: #eb571c;
+  --orange: #EA591A;
   --dark: #252422;
   --mid-dark: #403D38;
   --tile-muted: #D5D2CC;
@@ -123,30 +123,28 @@ body { color: var(--text); }
 
 .info-line { 
   min-height: calc(30 / 540 * 100vh); 
-  background: transparent; /* Fundo removido do container principal para isolar o ícone */
+  background: transparent;
   display: grid; 
-  /* Coluna 1: ícone, Coluna 2: valor, Coluna 3: texto */
   grid-template-columns: calc(26 / 960 * 100vw) auto 1fr; 
   align-items: center; 
   column-gap: calc(10 / 960 * 100vw); 
-  padding: 0; /* Removido padding para alinhar à esquerda */
+  padding: 0;
   position: relative; 
 }
 
-/* Cria a pílula cinza de fundo que engloba APENAS o valor e a label */
 .info-line::before {
   content: "";
   position: absolute;
-  grid-column: 2 / 4; /* Cobre da coluna 2 (valor) até o fim (label) */
+  grid-column: 2 / 4;
   width: 100%;
   height: 100%;
-  background: #F6F6F6; /* Cor do fundo cinza claro */
+  background: #F6F6F6;
   border-radius: min(calc(6 / 960 * 100vw), calc(6 / 540 * 100vh));
   z-index: 0;
 }
 
 .info-line__icon { 
-  grid-column: 1; /* Mantém o ícone na primeira coluna, fora do fundo cinza */
+  grid-column: 1;
   width: min(calc(24 / 960 * 100vw), calc(24 / 540 * 100vh)); 
   height: min(calc(24 / 960 * 100vw), calc(24 / 540 * 100vh)); 
   border-radius: min(calc(6 / 960 * 100vw), calc(6 / 540 * 100vh)); 
@@ -154,10 +152,6 @@ body { color: var(--text); }
   z-index: 1;
 }
 
-/* ========================================================
-   USANDO OS ÍCONES CORRETOS (Imagens que você enviou)
-   *Lembre-se de ajustar o caminho da 'url' se necessário*
-   ======================================================== */
 .info-line__icon--list { 
   background: url('data:image/svg+xml;utf8,<svg width="30" height="30" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="30" height="30" rx="7" fill="%23F6F6F6"/><path fill-rule="evenodd" clip-rule="evenodd" d="M8.51852 10C8.381 10 8.24911 10.0546 8.15187 10.1519C8.05463 10.2491 8 10.381 8 10.5185V11.5555C8 11.693 8.05463 11.8249 8.15187 11.9222C8.24911 12.0194 8.381 12.074 8.51852 12.074H9.55556C9.69308 12.074 9.82496 12.0194 9.92221 11.9222C10.0194 11.8249 10.0741 11.693 10.0741 11.5555V10.5185C10.0741 10.381 10.0194 10.2491 9.92221 10.1519C9.82496 10.0546 9.69308 10 9.55556 10H8.51852ZM9.55556 10.5185H8.51852V11.5555H9.55556V10.5185Z" fill="black"/><path d="M11.6296 11.0371C11.6296 10.8995 11.6843 10.7677 11.7815 10.6704C11.8788 10.5732 12.0106 10.5186 12.1482 10.5186H21.4815C21.619 10.5186 21.7509 10.5732 21.8482 10.6704C21.9454 10.7677 22 10.8995 22 11.0371C22 11.1746 21.9454 11.3065 21.8482 11.4037C21.7509 11.5009 21.619 11.5556 21.4815 11.5556H12.1482C12.0106 11.5556 11.8788 11.5009 11.7815 11.4037C11.6843 11.3065 11.6296 11.1746 11.6296 11.0371ZM12.1482 14.6666C12.0106 14.6666 11.8788 14.7212 11.7815 14.8185C11.6843 14.9157 11.6296 15.0476 11.6296 15.1851C11.6296 15.3226 11.6843 15.4545 11.7815 15.5517C11.8788 15.649 12.0106 15.7036 12.1482 15.7036H21.4815C21.619 15.7036 21.7509 15.649 21.8482 15.5517C21.9454 15.4545 22 15.3226 22 15.1851C22 15.0476 21.9454 14.9157 21.8482 14.8185C21.7509 14.7212 21.619 14.6666 21.4815 14.6666H12.1482ZM12.1482 18.8147C12.0106 18.8147 11.8788 18.8693 11.7815 18.9665C11.6843 19.0638 11.6296 19.1956 11.6296 19.3332C11.6296 19.4707 11.6843 19.6026 11.7815 19.6998C11.8788 19.797 12.0106 19.8517 12.1482 19.8517H21.4815C21.619 19.8517 21.7509 19.797 21.8482 19.6998C21.9454 19.6026 22 19.4707 22 19.3332C22 19.1956 21.9454 19.0638 21.8482 18.9665C21.7509 18.8693 21.619 18.8147 21.4815 18.8147H12.1482Z" fill="black"/><path fill-rule="evenodd" clip-rule="evenodd" d="M8 14.6667C8 14.5292 8.05463 14.3973 8.15187 14.3001C8.24911 14.2028 8.381 14.1482 8.51852 14.1482H9.55556C9.69308 14.1482 9.82496 14.2028 9.92221 14.3001C10.0194 14.3973 10.0741 14.5292 10.0741 14.6667V15.7037C10.0741 15.8412 10.0194 15.9731 9.92221 16.0704C9.82496 16.1676 9.69308 16.2222 9.55556 16.2222H8.51852C8.381 16.2222 8.24911 16.1676 8.15187 16.0704C8.05463 15.9731 8 15.8412 8 15.7037V14.6667ZM8.51852 14.6667H9.55556V15.7037H8.51852V14.6667ZM8.51852 18.2962C8.381 18.2962 8.24911 18.3509 8.15187 18.4481C8.05463 18.5453 8 18.6772 8 18.8147V19.8518C8 19.9893 8.05463 20.1212 8.15187 20.2184C8.24911 20.3156 8.381 20.3703 8.51852 20.3703H9.55556C9.69308 20.3703 9.82496 20.3156 9.92221 20.2184C10.0194 20.1212 10.0741 19.9893 10.0741 19.8518V18.8147C10.0741 18.6772 10.0194 18.5453 9.92221 18.4481C9.82496 18.3509 9.69308 18.2962 9.55556 18.2962H8.51852ZM9.55556 18.8147H8.51852V19.8518H9.55556V18.8147Z" fill="black"/></svg>') center/contain no-repeat;
   box-shadow: none; 
@@ -179,9 +173,9 @@ body { color: var(--text); }
   grid-column: 2;
   position: relative;
   z-index: 1;
-  padding-left: calc(10 / 960 * 100vw); /* Espaçamento interno esquerdo da pílula */
+  padding-left: calc(10 / 960 * 100vw);
   font-size: min(calc(13 / 960 * 100vw), calc(13 / 540 * 100vh)); 
-  font-weight: 600; /* <-- Alterado para Regular */
+  font-weight: 600;
   color: var(--text); 
 }
 
@@ -189,24 +183,22 @@ body { color: var(--text); }
   grid-column: 3;
   position: relative;
   z-index: 1;
-  padding-right: calc(10 / 960 * 100vw); /* Espaçamento interno direito da pílula */
+  padding-right: calc(10 / 960 * 100vw);
   font-size: min(calc(11 / 960 * 100vw), calc(11 / 540 * 100vh)); 
-  font-weight: 400; /* <-- Alterado para Regular */
+  font-weight: 400;
   color: var(--text); 
   white-space: nowrap; 
   overflow: hidden; 
   text-overflow: ellipsis; 
 }
+
 /* -----------------------------------------------------------------------
    Gauge — pílulas SVG (fill, sem stroke)
-   O SVG usa viewBox="0 0 240 160" e é posicionado via position:absolute
-   dentro de .gauge-wrap. O centro do arco fica em (120, 130) no viewBox,
-   o que naturalmente empurra as pílulas para a metade inferior — o texto
-   central fica na área vazia acima.
    ----------------------------------------------------------------------- */
 .finalizadas-body {
-  margin-top: calc(6 / 540 * 100vh);
-  height: calc(100% - calc(28 / 540 * 100vh));
+  /* ── ALTERADO: usa --gauge-y-offset para descer o bloco inteiro ── */
+  margin-top: calc(var(--gauge-y-offset) / 540 * 100vh);
+  height: calc(100% - calc(40 / 540 * 100vh));
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -214,27 +206,20 @@ body { color: var(--text); }
 
 .gauge-wrap {
   position: relative;
-  /* Altura generosa para o SVG respirar; o viewBox é 240×160,
-     então a proporção natural é ~0.667. Ajuste aqui se precisar
-     de mais ou menos espaço vertical para o gauge. */
-  height: calc(155 / 540 * 100vh);
+  height: calc(155 / 510 * 100vh);
 }
 
-/* O SVG ocupa todo o .gauge-wrap e se escala proporcionalmente */
 .gauge-svg {
   position: absolute;
   inset: 0;
   width: 100%;
-  height: 100%;
-  /* overflow:visible permite que pílulas nas bordas não sejam cortadas */
+  height: 105%;
   overflow: visible;
 }
 
-/* Regras antigas de stroke — mantidas para não quebrar nada, mas inativas
-   pois os novos segmentos usam fill e não têm essas classes. */
 .gauge-segment         { fill: none; }
-.gauge-segment--filled { stroke: var(--orange); }
-.gauge-segment--empty  { stroke: #e0ddd9; }
+.gauge-segment--filled { stroke: #EA591A; }
+.gauge-segment--empty  { stroke: #F6F6F6; }
 
 /* Texto central do gauge */
 .gauge-center {
@@ -253,7 +238,7 @@ body { color: var(--text); }
 .gauge-center__value {
   font-size: min(calc(26 / 960 * 100vw), calc(26 / 540 * 100vh));
   line-height: 1;
-  font-weight: 500;
+  font-weight: 400;
   color: var(--text);
 }
 
@@ -272,6 +257,7 @@ body { color: var(--text); }
   min-width: 0;
 }
 
+/* ── ALTERADO: texto do card direito em linha única ── */
 .mini-stat-card {
   min-height: calc(66 / 540 * 100vh);
   min-width: 0;
@@ -283,10 +269,18 @@ body { color: var(--text); }
   background: #efefef;
   padding: calc(8 / 540 * 100vh) calc(7 / 960 * 100vw);
   display: flex;
-  flex-direction: column;
+  flex-direction: column;      /* ← voltou para column */
   justify-content: center;
   align-items: center;
   text-align: center;
+  gap: calc(4 / 540 * 100vh);  /* ← espaço entre label e valor */
+}
+
+.mini-stat-card__label {
+  font-size: min(calc(7.6 / 960 * 100vw), calc(7.6 / 540 * 100vh));
+  line-height: 1.15;
+  color: #000000;
+  /* white-space: nowrap   ← removido, deixa o texto quebrar naturalmente */
 }
 
 .mini-stat-card__label { display:block; width:100%; max-width:100%; font-size:min(calc(8.6 / 960 * 100vw), calc(8.6 / 540 * 100vh)); line-height:1.1; color:#4f4f4f; white-space: nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -299,7 +293,7 @@ body { color: var(--text); }
    Filtros fixos
    ----------------------------------------------------------------------- */
 .filter-label-layer { position: fixed; inset: 0; pointer-events:none; z-index:55; }
-.filter-fixed-label { position:fixed; top: calc(31 / 540 * 100vh); color:#666; font-size:min(calc(12 / 960 * 100vw), calc(12 / 540 * 100vh)); font-weight:400; line-height:1; }
+.filter-fixed-label { position:fixed; top: calc(31 / 540 * 100vh); color:#666; font-size: 12px; font-weight:400; line-height:1; }
 .filter-fixed-label--consultor { left: calc(236 / 960 * 100vw); }
 .filter-fixed-label--time      { left: calc(403 / 960 * 100vw); }
 .filter-fixed-label--cliente   { left: calc(570 / 960 * 100vw); }
@@ -313,23 +307,27 @@ body { color: var(--text); }
 .st-key-filtro_consultor [data-testid="stWidgetLabel"],
 .st-key-filtro_time      [data-testid="stWidgetLabel"],
 .st-key-filtro_cliente   [data-testid="stWidgetLabel"] { display:none !important; }
+
 .st-key-filtro_consultor [data-baseweb="select"],
 .st-key-filtro_time      [data-baseweb="select"],
-.st-key-filtro_cliente   [data-baseweb="select"] { min-height: calc(23 / 540 * 100vh) !important; max-height: calc(23 / 540 * 100vh) !important; height: calc(23 / 540 * 100vh) !important; }
+.st-key-filtro_cliente   [data-baseweb="select"] { min-height: 23px !important; max-height: 23px !important; height: 23px !important; }
+
 .st-key-filtro_consultor [data-baseweb="select"] > div,
 .st-key-filtro_time      [data-baseweb="select"] > div,
 .st-key-filtro_cliente   [data-baseweb="select"] > div {
-  min-height: calc(23 / 540 * 100vh) !important; max-height: calc(23 / 540 * 100vh) !important; height: calc(23 / 540 * 100vh) !important;
-  border-radius: min(calc(14 / 960 * 100vw), calc(14 / 540 * 100vh)) !important;
+  min-height: 23px !important; max-height: 23px !important; height: 23px !important;
+  border-radius: 14px !important;
   background: #fff !important; border: none !important; box-shadow: none !important;
   padding: 0 calc(12 / 960 * 100vw) !important; display: flex !important; align-items: center !important; justify-content: center !important;
 }
+
 .st-key-filtro_consultor [data-baseweb="select"] > div > div,
 .st-key-filtro_time      [data-baseweb="select"] > div > div,
 .st-key-filtro_cliente   [data-baseweb="select"] > div > div {
   min-height: 100% !important; height: 100% !important; display: flex !important;
   align-items: center !important; justify-content: center !important; padding-top: 0 !important; padding-bottom: 0 !important;
 }
+
 .st-key-filtro_consultor [data-baseweb="select"] span,
 .st-key-filtro_consultor [data-baseweb="select"] input,
 .st-key-filtro_time      [data-baseweb="select"] span,
@@ -337,20 +335,34 @@ body { color: var(--text); }
 .st-key-filtro_cliente   [data-baseweb="select"] span,
 .st-key-filtro_cliente   [data-baseweb="select"] input {
   color: #292929 !important;
-  font-size: min(calc(12 / 960 * 100vw), calc(12 / 540 * 100vh)) !important;
-  line-height: 1 !important; transform: none !important;
+  font-size: 12px !important;
+  line-height: 12px !important;
+  height: 12px !important;
+  transform: none !important;
   padding: 0 !important; margin: 0 !important; top: auto !important; bottom: auto !important;
   text-align: center !important; justify-content: center !important;
 }
+
+.st-key-filtro_consultor [data-baseweb="select"] [aria-hidden="true"],
+.st-key-filtro_time      [data-baseweb="select"] [aria-hidden="true"],
+.st-key-filtro_cliente   [data-baseweb="select"] [aria-hidden="true"] {
+  font-size: 12px !important; line-height: 12px !important;
+}
+
 .st-key-filtro_consultor [data-baseweb="select"] svg,
 .st-key-filtro_time      [data-baseweb="select"] svg,
 .st-key-filtro_cliente   [data-baseweb="select"] svg {
-  width:  min(calc(12 / 960 * 100vw), calc(12 / 540 * 100vh));
-  height: min(calc(12 / 960 * 100vw), calc(12 / 540 * 100vh));
+  width: 12px !important;
+  height: 12px !important;
 }
+
 .st-key-filtro_consultor [data-baseweb="popover"],
 .st-key-filtro_time      [data-baseweb="popover"],
 .st-key-filtro_cliente   [data-baseweb="popover"] { z-index: 9999; }
+
+div[role="listbox"] li,
+div[role="listbox"] [role="option"] { font-size: 12px !important; line-height: 1.2 !important; }
+div[role="listbox"] [role="option"] > div { display: flex !important; align-items: center !important; }
 
 /* -----------------------------------------------------------------------
    Scroll das tabelas
