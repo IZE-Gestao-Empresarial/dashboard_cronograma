@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import base64
+from io import BytesIO
+
+import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 from core.data import fetch_dashboard_bundle
-from core.metrics import FilterState, build_filter_options, calculate_dashboard_state
+from core.metrics import ALL_OPTION, FilterState, calculate_dashboard_state
 from ui.render import inject_global_css, render_dashboard_html
 
 
@@ -14,8 +18,8 @@ REFRESH_MS = 5 * 60 * 1000
 GSHEET_ID = "1bZsOLP2Yi0HdqytKgkT6s2c6P56W3vil_LqGNKVpzkE"
 
 # Nome da aba principal + fallbacks caso a aba mude
-CRONOGRAMA_SHEET = "base_demanda"
-CRONOGRAMA_FALLBACKS = ("df_preparado", "CRONOGRAMA_GF&P", "base_demandas")
+CRONOGRAMA_SHEET = "base_demandas"
+CRONOGRAMA_FALLBACKS = ("base_demanda", "df_preparado", "CRONOGRAMA_GF&P")
 
 
 def hide_streamlit_chrome() -> None:
@@ -48,6 +52,75 @@ def hide_streamlit_chrome() -> None:
     )
 
 
+
+
+def _xlsx_download_href(rows: list[dict], columns: list[str]) -> str:
+    df = pd.DataFrame(rows)
+    if columns:
+        for col in columns:
+            if col not in df.columns:
+                df[col] = ""
+        df = df[columns]
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Detalhamento", index=False)
+    encoded = base64.b64encode(output.getvalue()).decode("ascii")
+    return "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + encoded
+
+
+
+def _records_df(records: list[dict]) -> pd.DataFrame:
+    return pd.DataFrame(records or [])
+
+
+def _filtered_records_df(df: pd.DataFrame, *, consultor: str = ALL_OPTION, time: str = ALL_OPTION, cliente: str = ALL_OPTION) -> pd.DataFrame:
+    work = df.copy()
+    if work.empty:
+        return work
+    if consultor != ALL_OPTION and "responsavel" in work.columns:
+        work = work[work["responsavel"].fillna("").astype(str) == consultor]
+    if time != ALL_OPTION and "area" in work.columns:
+        work = work[work["area"].fillna("").astype(str) == time]
+    if cliente != ALL_OPTION and "empresa_gfp" in work.columns:
+        work = work[work["empresa_gfp"].fillna("").astype(str) == cliente]
+    return work
+
+
+def _option_values(df: pd.DataFrame, column: str) -> list[str]:
+    if df.empty or column not in df.columns:
+        return [ALL_OPTION]
+    values = sorted({str(v).strip() for v in df[column].dropna().tolist() if str(v).strip()}, key=lambda x: x.casefold())
+    return [ALL_OPTION, *values]
+
+
+def _dependent_filter_options(df: pd.DataFrame, *, consultor: str, time: str, cliente: str) -> dict[str, list[str]]:
+    consultor_df = _filtered_records_df(df, time=time, cliente=cliente)
+    time_df = _filtered_records_df(df, consultor=consultor, cliente=cliente)
+    cliente_df = _filtered_records_df(df, consultor=consultor, time=time)
+    return {
+        "consultor": _option_values(consultor_df, "responsavel"),
+        "time": _option_values(time_df, "area"),
+        "cliente": _option_values(cliente_df, "empresa_gfp"),
+    }
+
+
+def _ensure_valid_filter_value(key: str, options: list[str]) -> str:
+    current = str(st.session_state.get(key, ALL_OPTION) or ALL_OPTION)
+    if current not in options:
+        st.session_state[key] = ALL_OPTION
+        return ALL_OPTION
+    return current
+
+
+def _attach_detail_downloads(state: dict) -> dict:
+    details = state.get("details", {}) or {}
+    for detail in details.values():
+        rows = detail.get("download_rows") or detail.get("rows") or []
+        columns = detail.get("columns") or []
+        detail["download_href"] = _xlsx_download_href(rows, columns)
+    return state
+
+
 def _get_secret(key: str, default: str = "") -> str:
     try:
         value = st.secrets.get(key, default)
@@ -77,7 +150,22 @@ if not bundle.get("ok"):
     st.stop()
 
 cronograma_records = bundle.get("datasets", {}).get("cronograma", [])
-filter_options = build_filter_options(cronograma_records)
+cronograma_df = _records_df(cronograma_records)
+
+current_consultor = str(st.session_state.get("filtro_consultor", ALL_OPTION) or ALL_OPTION)
+current_time = str(st.session_state.get("filtro_time", ALL_OPTION) or ALL_OPTION)
+current_cliente = str(st.session_state.get("filtro_cliente", ALL_OPTION) or ALL_OPTION)
+
+filter_options = _dependent_filter_options(
+    cronograma_df,
+    consultor=current_consultor,
+    time=current_time,
+    cliente=current_cliente,
+)
+
+_ensure_valid_filter_value("filtro_consultor", filter_options["consultor"])
+_ensure_valid_filter_value("filtro_time", filter_options["time"])
+_ensure_valid_filter_value("filtro_cliente", filter_options["cliente"])
 
 st.markdown(
     """
@@ -93,7 +181,6 @@ st.markdown(
 consultor = st.selectbox(
     "Consultor",
     options=filter_options["consultor"],
-    index=0,
     key="filtro_consultor",
     label_visibility="collapsed",
 )
@@ -101,7 +188,6 @@ consultor = st.selectbox(
 time = st.selectbox(
     "Time",
     options=filter_options["time"],
-    index=0,
     key="filtro_time",
     label_visibility="collapsed",
 )
@@ -109,18 +195,17 @@ time = st.selectbox(
 cliente = st.selectbox(
     "Cliente",
     options=filter_options["cliente"],
-    index=0,
     key="filtro_cliente",
     label_visibility="collapsed",
 )
 
-state = calculate_dashboard_state(
+state = _attach_detail_downloads(calculate_dashboard_state(
     resumo_records=bundle.get("datasets", {}).get("resumo", []),
     atualizacao_records=bundle.get("datasets", {}).get("atualizacao", []),
     atrasos_records=bundle.get("datasets", {}).get("atrasos", []),
     cronograma_records=cronograma_records,
     filters=FilterState(consultor=consultor, time=time, cliente=cliente),
-)
+))
 
 st.markdown(
     render_dashboard_html(state=state, updated_at=bundle.get("updatedAt")),

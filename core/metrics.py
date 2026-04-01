@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
+import math
 
 import pandas as pd
 
@@ -14,23 +16,24 @@ CONCLUSION_INDICATORS = {
     "Planejamento": "% conclusão — Planejamento",
     "Extras": "% conclusão — Extras",
 }
-
-# Valores de status que indicam conclusão (comparados em lowercase)
 DONE_STATUS_VALUES: frozenset[str] = frozenset({
     "feito", "done", "concluído", "concluido", "finalizado", "finalizada",
 })
-
-# Limite padrão de demandas finalizadas para alerta de clientes
 DEFAULT_MIN_FINALIZADAS = 5
-
-# Limite padrão de demandas no cronograma para alerta de clientes
 DEFAULT_MIN_CRONOGRAMA = 3
-
-# Valores de grupo_anterior que reclassificam a demanda para "Extras"
+EXCLUDED_FINAL_FILTER_CATEGORIES: frozenset[str] = frozenset({"_outros", "_cronograma"})
 _GRUPO_ANTERIOR_EXTRAS: frozenset[str] = frozenset({
     "[sem movimentação registrada]",
     "Cronograma Atual",
 })
+DETAIL_CARD_TITLES = {
+    "conclusao": "% Conclusão de Etapas",
+    "atualizacao": "Atualização",
+    "tempo_medio": "Tempo Médio Clientes",
+    "cronograma": "Demandas no Cronograma",
+    "finalizadas": "Demandas Finalizadas",
+    "atrasos": "Demandas em Atraso",
+}
 
 
 @dataclass
@@ -52,14 +55,21 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _strip_bracket_suffix(value: Any) -> str:
+    text = _text(value)
+    if not text:
+        return ""
+    return re.sub(r"\s*\[[^\]]*\]", "", text).strip()
+
+
 def _is_done(status_value: Any) -> bool:
-    """Retorna True quando o valor da coluna 'status' indica conclusão."""
     return _text(status_value).lower() in DONE_STATUS_VALUES
 
 
 def _normalize_resumo_value(value: Any) -> float:
     if isinstance(value, (int, float)):
-        return float(value)
+        num = float(value)
+        return num if math.isfinite(num) else 0.0
     text = _text(value).replace("%", "").replace(" ", "")
     if not text:
         return 0.0
@@ -71,20 +81,13 @@ def _normalize_resumo_value(value: Any) -> float:
     elif "," in text:
         text = text.replace(",", ".")
     try:
-        return float(text)
+        num = float(text)
+        return num if math.isfinite(num) else 0.0
     except ValueError:
         return 0.0
 
 
 def resolve_categoria(grupo_nome: str, grupo_anterior: str, categoria_atual: str) -> str:
-    """
-    Pós-processamento de categoria: quando grupo_anterior for
-    '[sem movimentação registrada]' ou 'Cronograma Atual', a demanda
-    é reclassificada como 'Extras' independente do grupo_nome.
-
-    Chamado em data.py após _infer_category para garantir que o dataframe
-    do cronograma já chegue ao metrics.py com a categoria correta.
-    """
     if _text(grupo_anterior) in _GRUPO_ANTERIOR_EXTRAS:
         return "Extras"
     return categoria_atual
@@ -102,10 +105,7 @@ def build_filter_options(cronograma_records: list[dict[str, Any]]) -> dict[str, 
     def _options(column: str) -> list[str]:
         if column not in df.columns:
             return [ALL_OPTION]
-        values = sorted(
-            {_text(v) for v in df[column].dropna().tolist() if _text(v)},
-            key=lambda x: x.casefold(),
-        )
+        values = sorted({_text(v) for v in df[column].dropna().tolist() if _text(v)}, key=lambda x: x.casefold())
         return [ALL_OPTION, *values]
 
     return {
@@ -119,101 +119,61 @@ def apply_filters(cronograma_records: list[dict[str, Any]], filters: FilterState
     df = _to_df(cronograma_records)
     if df.empty:
         return df
-    if filters.consultor != ALL_OPTION:
+    if filters.consultor != ALL_OPTION and "responsavel" in df.columns:
         df = df[df["responsavel"].fillna("").astype(str) == filters.consultor]
-    if filters.time != ALL_OPTION:
+    if filters.time != ALL_OPTION and "area" in df.columns:
         df = df[df["area"].fillna("").astype(str) == filters.time]
-    if filters.cliente != ALL_OPTION:
+    if filters.cliente != ALL_OPTION and "empresa_gfp" in df.columns:
         df = df[df["empresa_gfp"].fillna("").astype(str) == filters.cliente]
     return df.reset_index(drop=True)
 
 
-def _resumo_lookup(resumo_records: list[dict[str, Any]]) -> dict[str, float]:
-    resumo = {}
-    for row in resumo_records or []:
-        indicador = _text(row.get("indicador"))
-        if indicador:
-            resumo[indicador] = _normalize_resumo_value(row.get("valor"))
-    return resumo
+def _safe_int(value: Any) -> int:
+    try:
+        num = float(value)
+        return int(round(num)) if math.isfinite(num) else 0
+    except Exception:
+        return 0
 
 
-def _format_stage_rows(df: pd.DataFrame, limit: int = 100) -> list[dict[str, Any]]:
-    """Formata linhas de atualização. Aceita data_atualizacao ou ultima_atualizacao_dt."""
-    if df.empty:
-        return []
-
-    work = df.copy()
-
-    # Suporta ambos os nomes de coluna de data
-    date_col = None
-    for candidate in ("data_atualizacao", "ultima_atualizacao_dt"):
-        if candidate in work.columns:
-            date_col = candidate
-            break
-
-    if date_col:
-        work[date_col] = pd.to_datetime(work[date_col], errors="coerce")
-        work = work.sort_values(date_col, ascending=False, na_position="last")
-
-    company_col = "empresa_gfp_clean" if "empresa_gfp_clean" in work.columns else "empresa_gfp"
-    stage_col = "ultima_etapa" if "ultima_etapa" in work.columns else "item_nome"
-
-    return [
-        {
-            "cliente": _text(row.get(company_col)),
-            "etapa": _text(row.get(stage_col)),
-        }
-        for row in work.head(limit).to_dict(orient="records")
-    ]
+def _fmt_decimal(value: Any) -> str:
+    num = _normalize_resumo_value(value)
+    if abs(num - round(num)) < 0.05:
+        return f"{int(round(num))}"
+    return f"{num:.1f}".replace(".", ",")
 
 
-def _format_delay_rows(df: pd.DataFrame, limit: int = 4) -> list[dict[str, Any]]:
-    if df.empty:
-        return []
-    work = df.copy()
-    company_col = "empresa_gfp_clean" if "empresa_gfp_clean" in work.columns else "empresa_gfp"
-    cols = [col for col in [company_col, "qtd_atraso", "max_dias_atraso"] if col in work.columns]
-    work = work[cols].copy()
-    sort_cols = [c for c in ["max_dias_atraso", "qtd_atraso", company_col] if c in work.columns]
-    asc = [False] * (len(sort_cols) - 1) + [True]
-    work = work.sort_values(sort_cols, ascending=asc, na_position="last")
-    return [
-        {
-            "cliente": _text(row.get(company_col)),
-            "demandas": int(float(row.get("qtd_atraso") or 0)),
-            "dias": int(float(row.get("max_dias_atraso") or 0)),
-        }
-        for row in work.head(limit).to_dict(orient="records")
-    ]
+def _fmt_pct(value: Any) -> str:
+    return f"{_safe_int(value)}%"
 
 
-def _build_filtered_updates(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
+def _fmt_date(value: Any, with_time: bool = False) -> str:
+    dt = pd.to_datetime(value, errors="coerce")
+    if pd.isna(dt):
+        return "-"
+    return dt.strftime("%d/%m/%Y %H:%M") if with_time else dt.strftime("%d/%m/%Y")
+
+
+def _client_latest_demands(filtered_df: pd.DataFrame, limit: int = 3) -> list[dict[str, Any]]:
     if filtered_df.empty:
         return []
     work = filtered_df.copy()
     if "ultima_atualizacao_dt" in work.columns:
         work = work.sort_values("ultima_atualizacao_dt", ascending=False, na_position="last")
-    latest = work.groupby("empresa_gfp", as_index=False).first()
+    latest = work.groupby("empresa_gfp", as_index=False).first() if "empresa_gfp" in work.columns else work
     if "ultima_atualizacao_dt" in latest.columns:
         latest = latest.sort_values("ultima_atualizacao_dt", ascending=False, na_position="last")
     return [
         {
-            "cliente": _text(row.get("empresa_gfp")),
-            "etapa": _text(row.get("ultima_etapa") or row.get("item_nome")),
+            "cliente": _strip_bracket_suffix(row.get("empresa_gfp")),
+            "etapa": _text(row.get("item_nome") or row.get("ultima_etapa") or row.get("grupo_nome")),
         }
-        for row in latest.head(100).to_dict(orient="records")
+        for row in latest.head(limit).to_dict(orient="records")
     ]
 
 
-def _build_filtered_delays(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
-    if filtered_df.empty or "em_atraso" not in filtered_df.columns:
-        return []
-    # Apenas demandas COM previsao_dt registrada e NÃO concluídas
-    delayed = filtered_df[
-        filtered_df["em_atraso"].fillna(False)
-        & filtered_df["previsao_dt"].notna()
-        & ~filtered_df["status"].fillna("").apply(_is_done)
-    ].copy()
+def _delay_preview(filtered_df: pd.DataFrame, limit: int = 4) -> list[dict[str, Any]]:
+    delayed = _slice_atrasos(filtered_df)
     if delayed.empty:
         return []
     grouped = (
@@ -223,86 +183,267 @@ def _build_filtered_delays(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
     )
     return [
         {
-            "cliente": _text(row.get("empresa_gfp")),
-            "demandas": int(float(row.get("qtd_atraso") or 0)),
-            "dias": int(float(row.get("max_dias_atraso") or 0)),
+            "cliente": _strip_bracket_suffix(row.get("empresa_gfp")),
+            "demandas": _safe_int(row.get("qtd_atraso")),
+            "dias": _safe_int(row.get("max_dias_atraso")),
         }
-        for row in grouped.head(100).to_dict(orient="records")
+        for row in grouped.head(limit).to_dict(orient="records")
     ]
 
 
+def _slice_categoria(df: pd.DataFrame, categoria: str) -> pd.DataFrame:
+    if df.empty or "categoria" not in df.columns:
+        return pd.DataFrame(columns=df.columns)
+    return df[df["categoria"].fillna("") == categoria].copy()
+
+
+def _slice_tempo_medio(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=df.columns)
+    work = df.copy()
+    sort_cols = [c for c in ["empresa_gfp", "ultima_atualizacao_dt"] if c in work.columns]
+    if sort_cols:
+        work = work.sort_values(sort_cols, ascending=[True, False] if len(sort_cols) == 2 else [True], na_position="last")
+    if "empresa_gfp" in work.columns:
+        work = work.drop_duplicates(subset=["empresa_gfp"], keep="first")
+    return work.reset_index(drop=True)
+
+
+def _slice_cronograma(df: pd.DataFrame) -> pd.DataFrame:
+    return _slice_categoria(df, "_cronograma")
+
+
+def _slice_finalizadas(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=df.columns)
+    work = df[~df["categoria"].fillna("").isin(EXCLUDED_FINAL_FILTER_CATEGORIES)].copy()
+    return work[work["status"].fillna("").apply(_is_done)].reset_index(drop=True)
+
+
+def _slice_pendentes(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=df.columns)
+    work = df[~df["categoria"].fillna("").isin(EXCLUDED_FINAL_FILTER_CATEGORIES)].copy()
+    return work[~work["status"].fillna("").apply(_is_done)].reset_index(drop=True)
+
+
+def _slice_atualizacao(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=df.columns)
+    work = df.copy()
+    if "ultima_atualizacao_dt" in work.columns:
+        work = work.sort_values("ultima_atualizacao_dt", ascending=False, na_position="last")
+    return work.reset_index(drop=True)
+
+
+def _slice_atrasos(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=df.columns)
+    work = df.copy()
+    if "status" not in work.columns:
+        work["status"] = ""
+    mask = (
+        work.get("em_atraso", pd.Series(index=work.index, dtype="bool")).fillna(False)
+        & work.get("previsao_dt", pd.Series(index=work.index, dtype="datetime64[ns]")).notna()
+        & ~work["status"].fillna("").apply(_is_done)
+    )
+    delayed = work[mask].copy()
+    if "dias_atraso" in delayed.columns:
+        delayed = delayed.sort_values(["dias_atraso", "empresa_gfp"], ascending=[False, True], na_position="last")
+    return delayed.reset_index(drop=True)
+
+
 def _build_tabela_clientes(filtered_df: pd.DataFrame) -> list[dict[str, Any]]:
-    """
-    Tabela consolidada por cliente com:
-    - empresa_gfp, responsavel, area, meses_na_ize
-    - total_demandas, finalizadas, pendentes (universo exclui _outros e _cronograma)
-    - em_atraso, max_dias_atraso (só demandas com previsao_dt e não concluídas)
-    - ultima_atualizacao: data da última modificação, independente da categoria
-    - pct_conclusao: % de conclusão do cliente
-    """
     if filtered_df.empty:
         return []
-
-    exclude = {"_outros", "_cronograma"}
-    work = filtered_df[~filtered_df["categoria"].fillna("").isin(exclude)].copy()
-
-    if work.empty:
+    universe = filtered_df[~filtered_df["categoria"].fillna("").isin(EXCLUDED_FINAL_FILTER_CATEGORIES)].copy()
+    universe["done"] = universe["status"].fillna("").apply(_is_done)
+    grouped = universe.groupby("empresa_gfp", as_index=False).agg(
+        responsavel=("responsavel", "first"),
+        area=("area", "first"),
+        meses_na_ize=("meses_na_ize", "first"),
+        total_demandas=("empresa_gfp", "size"),
+        finalizadas=("done", "sum"),
+    ) if not universe.empty else pd.DataFrame(columns=["empresa_gfp", "responsavel", "area", "meses_na_ize", "total_demandas", "finalizadas"])
+    if grouped.empty:
         return []
-
-    work["_done"] = work["status"].fillna("").apply(_is_done)
-
-    agg: dict[str, Any] = {
-        "total_demandas": ("empresa_gfp", "size"),
-        "finalizadas": ("_done", "sum"),
-    }
-    if "responsavel" in work.columns:
-        agg["responsavel"] = ("responsavel", "first")
-    if "area" in work.columns:
-        agg["area"] = ("area", "first")
-    if "meses_na_ize" in work.columns:
-        agg["meses_na_ize"] = ("meses_na_ize", "first")
-
-    base = work.groupby("empresa_gfp", as_index=False).agg(**agg)
-    base["finalizadas"] = base["finalizadas"].astype(int)
-    base["pendentes"] = base["total_demandas"] - base["finalizadas"]
-    base["pct_conclusao"] = (base["finalizadas"] / base["total_demandas"] * 100.0).round(1)
-
-    # Última atualização vem do df completo (independe de categoria)
+    grouped["finalizadas"] = grouped["finalizadas"].astype(int)
+    grouped["pendentes"] = grouped["total_demandas"] - grouped["finalizadas"]
+    grouped["pct_conclusao"] = (grouped["finalizadas"] / grouped["total_demandas"] * 100.0).fillna(0).round(1)
     if "ultima_atualizacao_dt" in filtered_df.columns:
-        last_upd = (
-            filtered_df.groupby("empresa_gfp")["ultima_atualizacao_dt"]
-            .max()
-            .reset_index()
-            .rename(columns={"ultima_atualizacao_dt": "ultima_atualizacao"})
+        last_upd = filtered_df.groupby("empresa_gfp", as_index=False)["ultima_atualizacao_dt"].max()
+        grouped = grouped.merge(last_upd, on="empresa_gfp", how="left")
+    delayed = _slice_atrasos(filtered_df)
+    if not delayed.empty:
+        atraso_agg = delayed.groupby("empresa_gfp", as_index=False).agg(
+            qtd_atraso=("empresa_gfp", "size"),
+            max_dias_atraso=("dias_atraso", "max"),
         )
-        base = base.merge(last_upd, on="empresa_gfp", how="left")
-        base["ultima_atualizacao"] = pd.to_datetime(
-            base["ultima_atualizacao"], errors="coerce"
-        ).dt.strftime("%d/%m/%Y %H:%M")
-
-    # Atrasos: só com prazo registrado e não concluídas
-    if "em_atraso" in filtered_df.columns and "dias_atraso" in filtered_df.columns:
-        delayed = filtered_df[
-            filtered_df["previsao_dt"].notna()
-            & ~filtered_df["status"].fillna("").apply(_is_done)
-            & filtered_df["em_atraso"].fillna(False)
-        ].copy()
-        if not delayed.empty:
-            atraso_agg = (
-                delayed.groupby("empresa_gfp", as_index=False)
-                .agg(em_atraso=("empresa_gfp", "size"), max_dias_atraso=("dias_atraso", "max"))
-            )
-            base = base.merge(atraso_agg, on="empresa_gfp", how="left")
-        base["em_atraso"] = base.get("em_atraso", 0)
-        base["max_dias_atraso"] = base.get("max_dias_atraso", 0)
-        base["em_atraso"] = base["em_atraso"].fillna(0).astype(int)
-        base["max_dias_atraso"] = base["max_dias_atraso"].fillna(0).astype(int)
+        grouped = grouped.merge(atraso_agg, on="empresa_gfp", how="left")
+    if "qtd_atraso" not in grouped.columns:
+        grouped["qtd_atraso"] = 0
     else:
-        base["em_atraso"] = 0
-        base["max_dias_atraso"] = 0
+        grouped["qtd_atraso"] = pd.to_numeric(grouped["qtd_atraso"], errors="coerce").fillna(0).astype(int)
+    if "max_dias_atraso" not in grouped.columns:
+        grouped["max_dias_atraso"] = 0
+    else:
+        grouped["max_dias_atraso"] = pd.to_numeric(grouped["max_dias_atraso"], errors="coerce").fillna(0).astype(int)
+    grouped = grouped.sort_values("empresa_gfp", key=lambda s: s.fillna("").astype(str).str.casefold())
+    return grouped.to_dict(orient="records")
 
-    base = base.sort_values("empresa_gfp", key=lambda s: s.str.casefold())
-    return base.to_dict(orient="records")
+
+def _build_detail_views(filtered_df: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    details: dict[str, dict[str, Any]] = {}
+
+    conclusao = filtered_df[filtered_df["categoria"].fillna("").isin(CONCLUSION_ORDER)].copy() if not filtered_df.empty and "categoria" in filtered_df.columns else pd.DataFrame()
+    if conclusao.empty:
+        conclusao_rows = []
+    else:
+        category_order = {name: idx for idx, name in enumerate(CONCLUSION_ORDER)}
+        conclusao["__cat_order"] = conclusao["categoria"].map(category_order).fillna(999).astype(int)
+        conclusao["__empresa_sort"] = conclusao.get("empresa_gfp", "").fillna("").astype(str).str.casefold() if "empresa_gfp" in conclusao.columns else ""
+        sort_cols = ["__cat_order"]
+        ascending = [True]
+        if "empresa_gfp" in conclusao.columns:
+            sort_cols.append("__empresa_sort")
+            ascending.append(True)
+        if "ultima_atualizacao_dt" in conclusao.columns:
+            sort_cols.append("ultima_atualizacao_dt")
+            ascending.append(False)
+        conclusao = conclusao.sort_values(sort_cols, ascending=ascending, na_position="last")
+        conclusao_rows = [
+            {
+                "Categoria": _text(row.get("categoria")) or "-",
+                "Cliente": _text(row.get("empresa_gfp")) or "-",
+                "Demanda": _text(row.get("item_nome")) or "-",
+                "Grupo atual": _text(row.get("grupo_nome")) or "-",
+                "Status": _text(row.get("status")) or "-",
+                "Previsão": _fmt_date(row.get("previsao_dt")),
+                "Atualizado em": _fmt_date(row.get("ultima_atualizacao_dt"), with_time=True),
+                "Responsável": _text(row.get("responsavel")) or "-",
+                "Time": _text(row.get("area")) or "-",
+            }
+            for row in conclusao.to_dict(orient="records")
+        ]
+    details["conclusao"] = {
+        "title": DETAIL_CARD_TITLES["conclusao"],
+        "download_name": "detalhamento_conclusao_etapas.xlsx",
+        "columns": ["Categoria", "Cliente", "Demanda", "Grupo atual", "Status", "Previsão", "Atualizado em", "Responsável", "Time"],
+        "rows": conclusao_rows,
+    }
+
+    atualizacao = _slice_atualizacao(filtered_df)
+    _atualizacao_rows = [
+        {
+            "Cliente": _text(row.get("empresa_gfp")) or "-",
+            "Demanda": _text(row.get("item_nome")) or "-",
+            "Grupo atual": _text(row.get("grupo_nome")) or "-",
+            "Status": _text(row.get("status")) or "-",
+            "Atualizado em": _fmt_date(row.get("ultima_atualizacao_dt"), with_time=True),
+            "Responsável": _text(row.get("responsavel")) or "-",
+            "Time": _text(row.get("area")) or "-",
+        }
+        for row in atualizacao.to_dict(orient="records")
+    ]
+    details["atualizacao"] = {
+        "title": DETAIL_CARD_TITLES["atualizacao"],
+        "download_name": "detalhamento_atualizacao.xlsx",
+        "columns": ["Cliente", "Demanda", "Grupo atual", "Status", "Atualizado em", "Responsável", "Time"],
+        "rows": _atualizacao_rows[:300],
+        "download_rows": _atualizacao_rows,
+    }
+
+    tempo = _slice_tempo_medio(filtered_df)
+    demand_count = filtered_df.groupby("empresa_gfp").size().to_dict() if not filtered_df.empty else {}
+    details["tempo_medio"] = {
+        "title": DETAIL_CARD_TITLES["tempo_medio"],
+        "download_name": "detalhamento_tempo_medio.xlsx",
+        "columns": ["Cliente", "Tempo na IZE (meses)", "Demandas", "Responsável", "Time"],
+        "rows": [
+            {
+                "Cliente": _text(row.get("empresa_gfp")) or "-",
+                "Tempo na IZE (meses)": _fmt_decimal(row.get("meses_na_ize")),
+                "Demandas": _safe_int(demand_count.get(row.get("empresa_gfp"), 0)),
+                "Responsável": _text(row.get("responsavel")) or "-",
+                "Time": _text(row.get("area")) or "-",
+            }
+            for row in tempo.sort_values([c for c in ["meses_na_ize", "empresa_gfp"] if c in tempo.columns], ascending=[False, True] if {"meses_na_ize", "empresa_gfp"}.issubset(set(tempo.columns)) else True, na_position="last").to_dict(orient="records")
+        ],
+    }
+
+    cron = _slice_cronograma(filtered_df)
+    if cron.empty:
+        cron_rows = []
+    else:
+        cron_rows_df = cron.groupby("empresa_gfp", as_index=False).agg(
+            Time=("area", "first"),
+            Responsável=("responsavel", "first"),
+            Demandas=("empresa_gfp", "size"),
+            Última_atualização=("ultima_atualizacao_dt", "max"),
+            Próxima_entrega=("previsao_dt", "min"),
+        )
+        cron_rows_df["Situação"] = cron_rows_df["Demandas"].apply(lambda n: "Abaixo do mínimo" if n < DEFAULT_MIN_CRONOGRAMA else "Dentro do esperado")
+        cron_rows_df = cron_rows_df.sort_values(["Demandas", "empresa_gfp"], ascending=[True, True], na_position="last")
+        cron_rows = [
+            {
+                "Cliente": _text(row.get("empresa_gfp")) or "-",
+                "Demandas no cronograma": _safe_int(row.get("Demandas")),
+                "Situação": _text(row.get("Situação")) or "-",
+                "Próxima entrega": _fmt_date(row.get("Próxima_entrega")),
+                "Última atualização": _fmt_date(row.get("Última_atualização"), with_time=True),
+                "Responsável": _text(row.get("Responsável")) or "-",
+                "Time": _text(row.get("Time")) or "-",
+            }
+            for row in cron_rows_df.to_dict(orient="records")
+        ]
+    details["cronograma"] = {
+        "title": DETAIL_CARD_TITLES["cronograma"],
+        "download_name": "detalhamento_cronograma.xlsx",
+        "columns": ["Cliente", "Demandas no cronograma", "Situação", "Próxima entrega", "Última atualização", "Responsável", "Time"],
+        "rows": cron_rows,
+    }
+
+    tabela_clientes = _build_tabela_clientes(filtered_df)
+    final_rows = [
+        {
+            "Cliente": _text(row.get("empresa_gfp")) or "-",
+            "Finalizadas": _safe_int(row.get("finalizadas")),
+            "Pendentes": _safe_int(row.get("pendentes")),
+            "% Conclusão": _fmt_pct(row.get("pct_conclusao")),
+            "Responsável": _text(row.get("responsavel")) or "-",
+            "Time": _text(row.get("area")) or "-",
+            "Última atualização": _fmt_date(row.get("ultima_atualizacao_dt"), with_time=True),
+        }
+        for row in tabela_clientes
+    ]
+    details["finalizadas"] = {
+        "title": DETAIL_CARD_TITLES["finalizadas"],
+        "download_name": "detalhamento_finalizadas.xlsx",
+        "columns": ["Cliente", "Finalizadas", "Pendentes", "% Conclusão", "Responsável", "Time", "Última atualização"],
+        "rows": final_rows,
+    }
+
+    atrasos = _slice_atrasos(filtered_df)
+    details["atrasos"] = {
+        "title": DETAIL_CARD_TITLES["atrasos"],
+        "download_name": "detalhamento_atrasos.xlsx",
+        "columns": ["Cliente", "Demanda", "Grupo atual", "Previsão", "Dias em atraso", "Responsável", "Time", "Status"],
+        "rows": [
+            {
+                "Cliente": _text(row.get("empresa_gfp")) or "-",
+                "Demanda": _text(row.get("item_nome")) or "-",
+                "Grupo atual": _text(row.get("grupo_nome")) or "-",
+                "Previsão": _fmt_date(row.get("previsao_dt")),
+                "Dias em atraso": _safe_int(row.get("dias_atraso")),
+                "Responsável": _text(row.get("responsavel")) or "-",
+                "Time": _text(row.get("area")) or "-",
+                "Status": _text(row.get("status")) or "-",
+            }
+            for row in atrasos.to_dict(orient="records")
+        ],
+    }
+
+    return details
 
 
 def calculate_dashboard_state(
@@ -313,109 +454,41 @@ def calculate_dashboard_state(
     cronograma_records: list[dict[str, Any]],
     filters: FilterState,
 ) -> dict[str, Any]:
-    resumo = _resumo_lookup(resumo_records)
     filtered_df = apply_filters(cronograma_records, filters)
 
-    # ------------------------------------------------------------------
-    # Conclusão de etapas
-    # Regra: usa coluna 'status' (DONE_STATUS_VALUES), não 'finalizada'.
-    # No modo is_all, lê os valores pré-calculados do resumo (já derivados
-    # com a mesma lógica em data._build_resumo) para evitar reprocessar
-    # o dataframe completo.
-    # ------------------------------------------------------------------
-    if filters.is_all:
-        conclusao = {
-            category: resumo.get(indicator, 0.0)
-            for category, indicator in CONCLUSION_INDICATORS.items()
-        }
+    conclusao: dict[str, float] = {}
+    for categoria in CONCLUSION_ORDER:
+        cat_df = _slice_categoria(filtered_df, categoria)
+        total = len(cat_df)
+        finalizadas = int(cat_df["status"].fillna("").apply(_is_done).sum()) if total else 0
+        conclusao[categoria] = (finalizadas / total * 100.0) if total else 0.0
+
+    atualizacao_rows = _client_latest_demands(filtered_df, limit=3)
+    atraso_rows = _delay_preview(filtered_df, limit=4)
+
+    tempo_df = _slice_tempo_medio(filtered_df)
+    tempo_medio = float(tempo_df["meses_na_ize"].dropna().mean()) if not tempo_df.empty and "meses_na_ize" in tempo_df.columns else 0.0
+
+    cron_df = _slice_cronograma(filtered_df)
+    if cron_df.empty:
+        demandas_media = 0.0
+        clientes_menos_3 = 0
     else:
-        conclusao = {}
-        for category in CONCLUSION_ORDER:
-            cat_df = filtered_df[filtered_df["categoria"].fillna("") == category]
-            total = len(cat_df)
-            if total == 0:
-                conclusao[category] = 0.0
-                continue
-            done = cat_df["status"].fillna("").apply(_is_done).sum()
-            conclusao[category] = done / total * 100.0
+        per_client = cron_df.groupby("empresa_gfp").size()
+        demandas_media = float(per_client.mean()) if not per_client.empty else 0.0
+        clientes_menos_3 = int((per_client < DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client.empty else 0
 
-    # ------------------------------------------------------------------
-    # Atualização recente — independente da categoria
-    # ------------------------------------------------------------------
-    if filters.is_all:
-        atualizacao_rows = _format_stage_rows(_to_df(atualizacao_records), limit=100)
-    else:
-        atualizacao_rows = _build_filtered_updates(filtered_df)
-
-    # ------------------------------------------------------------------
-    # Atrasos — apenas demandas COM previsao_dt e NÃO concluídas
-    # ------------------------------------------------------------------
-    if filters.is_all:
-        atraso_rows = _format_delay_rows(_to_df(atrasos_records), limit=100)
-    else:
-        atraso_rows = _build_filtered_delays(filtered_df)
-
-    # ------------------------------------------------------------------
-    # Tempo médio — deduplicado por cliente
-    # ------------------------------------------------------------------
-    if filters.is_all:
-        tempo_medio = resumo.get("Tempo médio clientes (meses)", 0.0)
-    else:
-        unique_clients = filtered_df[["empresa_gfp", "meses_na_ize"]].drop_duplicates(subset=["empresa_gfp"])
-        tempo_medio = float(unique_clients["meses_na_ize"].dropna().mean()) if not unique_clients.empty else 0.0
-
-    # ------------------------------------------------------------------
-    # Demandas no cronograma — média por cliente por time
-    # ------------------------------------------------------------------
-    if filters.is_all:
-        demandas_media = resumo.get("Média por cliente (cronograma)", 0.0)
-        clientes_menos_3 = int(round(resumo.get("Clientes abaixo do mínimo", 0.0)))
-    else:
-        cron_df = filtered_df[filtered_df["categoria"].fillna("") == "_cronograma"]
-        if cron_df.empty:
-            demandas_media = 0.0
-            clientes_menos_3 = 0
-        else:
-            group_cols = [c for c in ["area", "empresa_gfp"] if c in cron_df.columns]
-            per_client = cron_df.groupby(group_cols).size()
-            demandas_media = float(per_client.mean()) if not per_client.empty else 0.0
-            clientes_menos_3 = int((per_client < DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client.empty else 0
-
-    # ------------------------------------------------------------------
-    # Demandas finalizadas / pendentes
-    # Regra: usa coluna 'status'. Universo exclui _outros e _cronograma.
-    # clientes_menos_5: clientes com < DEFAULT_MIN_FINALIZADAS finalizadas.
-    # clientes_menos_3_final: clientes com < DEFAULT_MIN_CRONOGRAMA finalizadas
-    #   (indicador separado de clientes_menos_3, que se refere ao cronograma).
-    # ------------------------------------------------------------------
-    if filters.is_all:
-        finalizadas = int(round(resumo.get("Demandas finalizadas (total)", 0.0)))
-        pendentes = int(round(resumo.get("Demandas pendentes", 0.0)))
-        clientes_menos_3_final = int(round(resumo.get("Clientes com menos de 3 finalizadas", 0.0)))  # FIX: chave própria
-        clientes_menos_5 = int(round(resumo.get("Clientes com menos de 5 finalizadas", 0.0)))
-    else:
-        exclude = {"_outros", "_cronograma"}
-        work = filtered_df[~filtered_df["categoria"].fillna("").isin(exclude)].copy()
-        done_mask = work["status"].fillna("").apply(_is_done) if not work.empty else pd.Series(dtype=bool)
-        finalizadas = int(done_mask.sum()) if not work.empty else 0
-        pendentes = len(work) - finalizadas if not work.empty else 0
-
-        # FIX: per_client_done calculado aqui para uso nos dois indicadores abaixo
-        per_client_done = (
-            work[done_mask].groupby("empresa_gfp").size()
-            if not work.empty
-            else pd.Series(dtype="int64")
-        )
-        clientes_menos_3_final = int((per_client_done < DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client_done.empty else 0
-        clientes_menos_5 = int((per_client_done < DEFAULT_MIN_FINALIZADAS).sum()) if not per_client_done.empty else 0
-
+    universe = filtered_df[~filtered_df["categoria"].fillna("").isin(EXCLUDED_FINAL_FILTER_CATEGORIES)].copy()
+    done_mask = universe["status"].fillna("").apply(_is_done) if not universe.empty else pd.Series(dtype=bool)
+    finalizadas = int(done_mask.sum()) if not universe.empty else 0
+    pendentes = int((~done_mask).sum()) if not universe.empty else 0
+    per_client_done = universe[done_mask].groupby("empresa_gfp").size() if not universe.empty and done_mask.any() else pd.Series(dtype="int64")
+    clientes_menos_5 = int((per_client_done < DEFAULT_MIN_FINALIZADAS).sum()) if not per_client_done.empty else 0
     total_gauge = finalizadas + pendentes
     conclusao_total = (finalizadas / total_gauge * 100.0) if total_gauge else 0.0
 
-    # ------------------------------------------------------------------
-    # Tabela de clientes (para exibição e download)
-    # ------------------------------------------------------------------
     tabela_clientes = _build_tabela_clientes(filtered_df)
+    details = _build_detail_views(filtered_df)
 
     return {
         "filters": {
@@ -435,11 +508,11 @@ def calculate_dashboard_state(
             "finalizadas": {
                 "demandas": finalizadas,
                 "pendentes": pendentes,
-                "clientes_menos_3": clientes_menos_3_final,
+                "clientes_menos_3": clientes_menos_3,
                 "clientes_menos_5": clientes_menos_5,
                 "conclusao_total": conclusao_total,
             },
         },
-        # Tabela detalhada por cliente (para exibição em tela e download)
+        "details": details,
         "tabela_clientes": tabela_clientes,
     }
