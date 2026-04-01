@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 import urllib.parse
 from io import StringIO
@@ -24,7 +23,6 @@ def _is_done(status_value: Any) -> bool:
 
 DEFAULT_TIMEOUT = 25
 CACHE_TTL_SECONDS = 240
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 # -----------------------------
