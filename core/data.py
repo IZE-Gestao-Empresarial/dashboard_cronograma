@@ -131,9 +131,8 @@ GROUP_TO_CATEGORY = {
     "Revisão e Construção do Segundo Ciclo de Planejamento": "Extras",
     "Revisão e Maturação da Gestão Financeira": "Extras",
     "Rotina Mensal": "Extras",
-    "Diagnóstico e Padronização": "Diagnóstico",
-    "Cronograma Atual": "_cronograma",
 }
+
 
 def _infer_category(grupo_nome: str, grupo_anterior: str) -> str:
     """
@@ -141,28 +140,27 @@ def _infer_category(grupo_nome: str, grupo_anterior: str) -> str:
     (grupo_nome internamente) e grupo_anterior.
 
     Regras em ordem de prioridade:
-    1. grupo_atual == "Cronograma Atual" → usa grupo_anterior como origem,
-       pois "Cronograma Atual" é um estado operacional temporário e a demanda
-       pertence ao indicador do grupo de onde veio.
-    2. grupo_atual == "Finalizadas" → usa grupo_anterior como origem,
-       pois a demanda foi movida para fora do seu grupo original.
-    3. Nos demais casos → usa grupo_atual como origem.
-    4. Se a origem estiver mapeada em GROUP_TO_CATEGORY → usa o mapeamento.
-    5. Origem vazia ou não mapeada → "Extras" (tudo que não pertence a
-       Base/Análises/Planejamento/Diagnóstico/Cronograma é Extra).
+    1. Se grupo_nome for "Cronograma Atual" ou "Finalizadas", a origem real
+       está em grupo_anterior (a demanda foi movida do seu grupo original).
+    2. Caso contrário, a origem é o próprio grupo_nome.
+    3. Se a origem estiver mapeada em GROUP_TO_CATEGORY → usa o mapeamento.
+    4. Origem vazia, "[sem movimentação registrada]", ou não mapeada → "Extras".
+
+    Nota: "Cronograma Atual" foi removido de GROUP_TO_CATEGORY.
+    Demandas ativas nesse grupo mantêm a categoria do seu grupo de origem
+    e são identificadas como "no cronograma" via grupo_nome diretamente
+    em _slice_cronograma — não via categoria.
     """
-    grupo_nome = (grupo_nome or "").strip()
+    grupo_nome     = (grupo_nome or "").strip()
     grupo_anterior = (grupo_anterior or "").strip()
 
-    # Grupos em que a origem real está em grupo_anterior
     use_anterior = grupo_nome in ("Cronograma Atual", "Finalizadas")
-    base_source = grupo_anterior if use_anterior else grupo_nome
+    base_source  = grupo_anterior if use_anterior else grupo_nome
 
-    # Origem mapeada explicitamente
     if base_source in GROUP_TO_CATEGORY:
         return GROUP_TO_CATEGORY[base_source]
 
-    # Origem vazia ou não mapeada → Extras
+    # [sem movimentação registrada], vazio, ou não mapeado → Extras
     return "Extras"
 
 
@@ -203,19 +201,13 @@ def prepare_cronograma_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "ultima_atualizacao_dt": ultima_atualizacao_dt,
     })
 
-    if "categoria" in work.columns:
-        # Mesmo quando a coluna já vem preenchida, aplica a regra de
-        # grupo_anterior para garantir consistência
-        out["categoria"] = [
-            _infer_category(gn, ga) if _clean_string_series(pd.Series([cat])).iloc[0] in ("_outros", "_finalizadas_sem_origem", "")
-            else _clean_string_series(pd.Series([cat])).iloc[0]
-            for gn, ga, cat in zip(out["grupo_nome"], out["grupo_anterior"], _clean_string_series(work["categoria"]))
-        ]
-    else:
-        out["categoria"] = [
-            _infer_category(gn, ga)
-            for gn, ga in zip(out["grupo_nome"], out["grupo_anterior"])
-        ]
+    # ALTERAÇÃO: categoria sempre recalculada via _infer_category,
+    # ignorando qualquer valor pré-existente na coluna para garantir
+    # consistência com as regras de negócio atuais.
+    out["categoria"] = [
+        _infer_category(gn, ga)
+        for gn, ga in zip(out["grupo_nome"], out["grupo_anterior"])
+    ]
 
     # finalizada: derivada da coluna status para consistência com metrics.py
     if "finalizada" in work.columns:
@@ -328,8 +320,7 @@ def fetch_dashboard_bundle(
 
 CONCLUSION_CATEGORIES = ["Base", "Análises", "Planejamento", "Extras"]
 
-# Categorias internas que não participam dos indicadores de conclusão
-_EXCLUDE_FROM_INDICATORS: frozenset[str] = frozenset({"_cronograma", "Diagnóstico"})
+_EXCLUDE_FROM_INDICATORS: frozenset[str] = frozenset()
 
 
 def _build_resumo(df: pd.DataFrame) -> list[dict[str, Any]]:
@@ -337,13 +328,12 @@ def _build_resumo(df: pd.DataFrame) -> list[dict[str, Any]]:
     Gera os registros de resumo calculados a partir do cronograma.
 
     Regras de negócio:
-    - % conclusão por categoria: via coluna 'status' (DONE_STATUS_VALUES),
-      não a coluna booleana 'finalizada'.
-    - Pendentes: demandas não concluídas fora das categorias internas
-      (_cronograma, Diagnóstico).
+    - % conclusão por categoria: via coluna 'status' (DONE_STATUS_VALUES).
+      Demandas ativas em "Cronograma Atual" entram no denominador da sua
+      categoria de origem mas não no numerador (status != done).
+    - Pendentes: demandas não concluídas fora das categorias internas (Diagnóstico).
     - Clientes com menos de 5 finalizadas: conta por empresa_gfp.
-    - Clientes com menos de 3 finalizadas: conta por empresa_gfp
-      (indicador separado do cronograma).
+    - Demandas no cronograma: filtradas por grupo_nome == "Cronograma Atual".
     """
     records = []
 
@@ -366,8 +356,8 @@ def _build_resumo(df: pd.DataFrame) -> list[dict[str, Any]]:
     tempo_medio = float(unique_clients["meses_na_ize"].dropna().mean()) if not unique_clients.empty else 0.0
     records.append({"indicador": "Tempo médio clientes (meses)", "valor": tempo_medio})
 
-    # Demandas no cronograma
-    cron_df = df[df["categoria"].fillna("") == "_cronograma"]
+    # ALTERAÇÃO: demandas no cronograma filtradas por grupo_nome em vez de categoria "_cronograma"
+    cron_df = df[df["grupo_nome"].fillna("") == "Cronograma Atual"]
     if not cron_df.empty:
         per_client = cron_df.groupby("empresa_gfp").size()
         media = float(per_client.mean()) if not per_client.empty else 0.0
@@ -395,7 +385,6 @@ def _build_resumo(df: pd.DataFrame) -> list[dict[str, Any]]:
     menos_5 = int((per_client_done < _DEFAULT_MIN_FINALIZADAS).sum()) if not per_client_done.empty else 0
     records.append({"indicador": "Clientes com menos de 5 finalizadas", "valor": menos_5})
 
-    # FIX: indicador próprio para "menos de 3 finalizadas", separado do cronograma
     menos_3_finalizadas = int((per_client_done < _DEFAULT_MIN_CRONOGRAMA).sum()) if not per_client_done.empty else 0
     records.append({"indicador": "Clientes com menos de 3 finalizadas", "valor": menos_3_finalizadas})
 

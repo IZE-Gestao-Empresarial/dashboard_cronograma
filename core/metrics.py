@@ -21,7 +21,10 @@ DONE_STATUS_VALUES: frozenset[str] = frozenset({
 })
 DEFAULT_MIN_FINALIZADAS = 5
 DEFAULT_MIN_CRONOGRAMA = 3
-EXCLUDED_FINAL_FILTER_CATEGORIES: frozenset[str] = frozenset({"_outros", "_cronograma"})
+# ALTERAÇÃO: "_cronograma" removido pois não é mais uma categoria.
+# Demandas no cronograma são identificadas via grupo_nome == "Cronograma Atual".
+# Apenas "Diagnóstico" é excluído dos indicadores de conclusão e finalizadas.
+EXCLUDED_FINAL_FILTER_CATEGORIES: frozenset[str] = frozenset({"Diagnóstico"})
 _GRUPO_ANTERIOR_EXTRAS: frozenset[str] = frozenset({
     "[sem movimentação registrada]",
     "Cronograma Atual",
@@ -209,8 +212,13 @@ def _slice_tempo_medio(df: pd.DataFrame) -> pd.DataFrame:
     return work.reset_index(drop=True)
 
 
+# ALTERAÇÃO: filtra por grupo_nome == "Cronograma Atual" em vez de categoria == "_cronograma".
+# Isso garante que demandas ativas no cronograma sejam contadas corretamente
+# independente da sua categoria de origem (Base, Análises, Planejamento, Extras).
 def _slice_cronograma(df: pd.DataFrame) -> pd.DataFrame:
-    return _slice_categoria(df, "_cronograma")
+    if df.empty or "grupo_nome" not in df.columns:
+        return pd.DataFrame(columns=df.columns)
+    return df[df["grupo_nome"].fillna("") == "Cronograma Atual"].copy()
 
 
 def _slice_finalizadas(df: pd.DataFrame) -> pd.DataFrame:
